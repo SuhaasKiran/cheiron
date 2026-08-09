@@ -7,13 +7,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
-
 _DEFAULT_ENVIRONMENT: Final = "development"
 _DEFAULT_LOG_LEVEL: Final = "INFO"
 _VALID_ENVIRONMENTS: Final = frozenset({"development", "test", "production"})
-_VALID_LOG_LEVELS: Final = frozenset(
-    {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}
-)
+_VALID_LOG_LEVELS: Final = frozenset({"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"})
 
 
 class SettingsError(ValueError):

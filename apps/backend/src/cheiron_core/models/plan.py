@@ -3,33 +3,33 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 from cheiron_core.models.query import TrialFilters
 from cheiron_core.models.validation import ModelValidationError
 
 
-class ChartType(str, Enum):
+class ChartType(StrEnum):
     """Chart types supported by the first deterministic query plans."""
 
     BAR_CHART = "bar_chart"
     TIME_SERIES = "time_series"
 
 
-class GroupBy(str, Enum):
+class GroupBy(StrEnum):
     """Fields that the first deterministic plans can group by."""
 
     START_YEAR = "start_year"
     TRIAL_PHASE = "trial_phase"
 
 
-class Measure(str, Enum):
+class Measure(StrEnum):
     """Measures calculated by the first deterministic plans."""
 
     TRIAL_COUNT = "trial_count"
 
 
-class SortOrder(str, Enum):
+class SortOrder(StrEnum):
     """Supported sort orders for chart data."""
 
     ASCENDING = "ascending"

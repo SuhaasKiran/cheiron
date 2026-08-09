@@ -4,6 +4,8 @@ description: Implement or modify Python backend code using robust, maintainable 
 
 Use this command for any Python backend change, including APIs, services, persistence, integrations, configuration, background work, and error handling.
 
+Place all backend implementation code in `apps/` (currently `apps/backend/`). Do not place backend source code in `packages/` or `services/`; `packages/` is reserved for reusable libraries and `services/` is currently unused.
+
 ## Keep this command current
 
 As the project evolves, update this command during the task only when a newly discovered instruction, constraint, or recurring consideration is specific enough to improve future Python backend work. Keep additions concise and actionable; do not add speculative, redundant, or task-local details that do not belong in this standing command.

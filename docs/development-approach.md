@@ -57,9 +57,9 @@ The initial folders are intentionally generic. As requirements become concrete, 
 
 | Location | Intended responsibility |
 | --- | --- |
-| `apps/` | Optional deployable clients, demos, or entry points. |
-| `services/` | Independently deployable backend services and orchestration layers. |
-| `packages/` | Shared contracts, domain logic, client adapters, and utilities with explicit ownership. |
+| `apps/` | Deployable applications and all backend implementations. The current backend belongs in `apps/backend/`; optional clients or demos can also live here. |
+| `services/` | Currently unused. Do not place backend source code here. If it gains a future purpose, document that purpose before using it. |
+| `packages/` | Reusable shared libraries with explicit ownership. Do not place application/backend code here. |
 | `tests/` | Cross-component, contract, integration, and end-to-end tests. Component-local unit tests may live beside code if the chosen ecosystem favors it. |
 | `tooling/` | Shared linting, formatting, build, test, CI, and developer automation configuration. |
 | `docs/` | Requirements, architecture decisions, schemas, examples, and operational notes. |

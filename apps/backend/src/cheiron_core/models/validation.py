@@ -11,7 +11,9 @@ class ModelValidationError(ValueError):
     """Raised when a model value does not meet its public contract."""
 
 
-def require_text(value: object, field_name: str, *, max_length: int | None = None) -> str:
+def require_text(
+    value: object, field_name: str, *, max_length: int | None = None
+) -> str:
     """Return a trimmed non-empty string or raise a contract error."""
 
     if not isinstance(value, str):

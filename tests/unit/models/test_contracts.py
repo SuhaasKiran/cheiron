@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from cheiron_core.models import (
     ChartType,
     GroupBy,

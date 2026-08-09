@@ -3,12 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-
 FIXTURE_PATH = (
-    Path(__file__).parents[2]
-    / "fixtures"
-    / "clinicaltrials"
-    / "nct00000102.json"
+    Path(__file__).parents[2] / "fixtures" / "clinicaltrials" / "nct00000102.json"
 )
 
 

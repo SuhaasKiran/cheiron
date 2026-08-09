@@ -39,5 +39,6 @@ Never claim a change is verified when tests were not run. Explain the reason and
 
 - Discover repository-specific commands from the project configuration and README; do not invent a test command when one exists.
 - Run targeted tests first, then the full affected suite. Run live/external checks only when explicitly configured and safe.
+- When the repository configures a formatter, linter, or static type checker, run each configured check locally before handoff. Treat a failure in any of them as a verification failure and fix it or report the remaining risk clearly.
 - For each new externally visible behavior, add a local test path using mocks/fakes whenever possible.
 - If a test requires unavailable infrastructure, add the best deterministic local coverage possible and state the missing integration validation clearly.

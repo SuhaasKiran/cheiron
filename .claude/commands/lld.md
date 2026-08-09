@@ -27,6 +27,19 @@ Before coding, identify:
 - Keep pure transformation/business logic free of I/O and framework state whenever possible.
 - Introduce abstractions only for real variation, testing seams, or boundary protection. Do not add indirection solely for hypothetical future use.
 
+## Interfaces, extensibility, and SOLID principles
+
+- Design interfaces around the needs of their consumers. Keep them small, explicit, typed, and stable; do not expose implementation details or create broad all-purpose interfaces.
+- Add an extension point only when there is a real or imminent variation, such as an external provider, storage adapter, or strategy that has more than one meaningful implementation. Keep the default path simple until then.
+- Prefer adding a new implementation behind an existing contract over changing consumers or adding conditionals throughout the codebase. Validate the new implementation with contract tests.
+- Apply SOLID as practical design guidance, not as a reason to add layers:
+  - **Single responsibility:** a module or class should have one clear reason to change.
+  - **Open/closed:** extend behavior through well-defined contracts when it is safer than modifying stable code.
+  - **Liskov substitution:** every implementation of an interface must honor its input, output, error, and side-effect promises.
+  - **Interface segregation:** consumers should depend only on methods they use.
+  - **Dependency inversion:** core logic depends on domain contracts; infrastructure provides implementations at the boundary.
+- Document the contract, supported behavior, error semantics, and compatibility expectations before adding a shared extension point. Do not break existing consumers without an explicit migration path.
+
 ## Dependency discipline
 
 - Maintain a directed acyclic dependency graph. If two modules need each other, extract the shared contract or neutral domain concept into a lower-level module.
@@ -64,8 +77,10 @@ Before coding, identify:
 
 ## Python packages, virtual environments, and environment variables
 
+- In this monorepo, place all backend/application code in `apps/` (currently `apps/backend/`). Reserve the repository's `packages/` directory for reusable shared libraries, not backend implementation code. Do not place backend source code in `services/`; that directory is currently unused.
+- When this command refers to Python packages, it means installed third-party libraries and project libraries—not the monorepo's `packages/` directory unless a reusable library is deliberately being created.
 - Use a project-local virtual environment named `.venv`. Create it with `python -m venv .venv` and activate it before installing or running project tools.
-- Record required Python packages in `requirements.txt`. Add a dependency only when it is needed, remove unused dependencies, and use reproducible version constraints according to the repository convention.
+- Record required Python libraries and installed packages in `requirements.txt`. Add a dependency only when it is needed, remove unused dependencies, and use reproducible version constraints according to the repository convention.
 - Install dependencies with `python -m pip install -r requirements.txt`; do not rely on globally installed packages or undocumented local tools.
 - Keep package-installation changes focused. Review new dependencies for maintenance, security, license, and whether a standard-library or existing dependency solution is sufficient.
 - Read configuration from environment variables at the application boundary through a validated settings object. Pass settings or narrow configuration values into components instead of reading environment variables throughout the codebase.

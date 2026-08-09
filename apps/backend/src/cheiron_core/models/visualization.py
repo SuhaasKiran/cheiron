@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from cheiron_core.models.plan import ChartType
 from cheiron_core.models.query import TrialFilters
@@ -27,7 +28,11 @@ class VisualizationSpec:
     def __post_init__(self) -> None:
         if not isinstance(self.chart_type, ChartType):
             raise ModelValidationError("chart_type must be a supported ChartType.")
-        object.__setattr__(self, "title", require_text(self.title, "title", max_length=300))
+        object.__setattr__(
+            self,
+            "title",
+            require_text(self.title, "title", max_length=300),
+        )
         object.__setattr__(self, "encoding", self._freeze_encoding(self.encoding))
         object.__setattr__(
             self,
@@ -44,7 +49,7 @@ class VisualizationSpec:
         for channel, field in encoding.items():
             clean_channel = require_text(channel, "encoding channel")
             normalized[clean_channel] = require_text(field, "encoding field")
-        return freeze_json_record(normalized, "encoding")
+        return MappingProxyType(normalized)
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-ready chart specification."""

@@ -2,6 +2,12 @@
 
 This log records each project commit in simple language. Each entry is added by the `/commit` command and is included in the same commit it describes.
 
+## 2026-08-08 — FEAT: add ClinicalTrials API client foundation
+
+- **Changed:** Moved backend code into `apps/backend/`, added a bounded ClinicalTrials.gov API client with local fake-transport tests, configured Ruff and mypy, and clarified backend folder and development-command rules.
+- **Why:** Keep backend code in one clear location while establishing a reliable, tested API boundary for later retrieval and chart-building work.
+- **Validated:** Ran Ruff lint and format checks, mypy (13 source files), the full `python -m pytest` suite (28 passed), `python -m compileall -q apps/backend/src`, `python -m pip check`, and `git diff --check`.
+
 ## 2026-08-08 — FEAT: add validated query and chart models
 
 - **Changed:** Added validated request, filter, internal-plan, and visualization-response models with unit tests and model-contract documentation. Updated commit rules to report reviewer findings and block commits on failed tests.
