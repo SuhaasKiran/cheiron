@@ -113,9 +113,7 @@ class ChartDataBuilder:
         sort: SortOrder,
     ) -> tuple[dict[str, object], ...]:
         counts: Counter[int] = Counter(
-            record.start_year
-            for record in records
-            if record.start_year is not None
+            record.start_year for record in records if record.start_year is not None
         )
         years = sorted(counts, reverse=sort is SortOrder.DESCENDING)
         return tuple(
