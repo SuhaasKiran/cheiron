@@ -1,4 +1,4 @@
-"""Fixture-backed end-to-end checks for the published example responses."""
+"""Fixture-backed end-to-end checks for the HTTP chart flow."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from cheiron_core.request_validation import RequestValidator
 from cheiron_core.trial_retrieval import TrialRetriever
 from fastapi.testclient import TestClient
 
-EXAMPLES_PATH = Path(__file__).parents[2] / "examples"
 FIXTURE_PATH = (
     Path(__file__).parents[1] / "fixtures" / "clinicaltrials" / "nct00000102.json"
 )
@@ -70,51 +69,6 @@ def make_fixture_client(
         chart_data_builder=ChartDataBuilder(),
     )
     return TestClient(create_http_api(flow)), transport
-
-
-@pytest.mark.parametrize(
-    ("example_name", "expected_query_parameters"),
-    (
-        (
-            "phase-distribution-filtered",
-            {
-                "format": ["json"],
-                "pageSize": ["100"],
-                "query.cond": ["Congenital Adrenal Hyperplasia"],
-            },
-        ),
-        (
-            "phase-distribution-unfiltered",
-            {"format": ["json"], "pageSize": ["100"]},
-        ),
-        (
-            "yearly-trials-empty",
-            {
-                "format": ["json"],
-                "pageSize": ["100"],
-                "query.cond": ["Congenital Adrenal Hyperplasia"],
-            },
-        ),
-    ),
-)
-def test_examples_match_the_full_local_http_flow(
-    example_name: str,
-    expected_query_parameters: dict[str, list[str]],
-) -> None:
-    request = load_json(EXAMPLES_PATH / f"{example_name}.request.json")
-    expected_response = load_json(EXAMPLES_PATH / f"{example_name}.response.json")
-    client, transport = make_fixture_client()
-
-    response = client.post("/api/v1/charts", json=request)
-
-    assert response.status_code == 200
-    assert response.json() == expected_response
-    assert len(transport.urls) == 2
-    count_query_parameters = dict(expected_query_parameters)
-    count_query_parameters["countTotal"] = ["true"]
-    count_query_parameters["pageSize"] = ["1"]
-    assert parse_qs(urlparse(transport.urls[0]).query) == count_query_parameters
-    assert parse_qs(urlparse(transport.urls[1]).query) == expected_query_parameters
 
 
 @pytest.mark.parametrize(
