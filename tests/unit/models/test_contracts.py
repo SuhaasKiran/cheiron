@@ -39,6 +39,37 @@ def test_request_model_normalizes_valid_query_and_filters() -> None:
     }
 
 
+def test_filter_model_accepts_an_explicit_multi_drug_comparison() -> None:
+    filters = TrialFilters(drug_names=(" Pembrolizumab ", "Nivolumab"))
+
+    assert filters.drug_names == ("Pembrolizumab", "Nivolumab")
+    assert filters.to_dict() == {
+        "drug_names": ["Pembrolizumab", "Nivolumab"],
+    }
+
+
+def test_filter_model_rejects_single_and_multi_drug_filters_together() -> None:
+    with pytest.raises(ModelValidationError, match="cannot be supplied together"):
+        TrialFilters(
+            drug_name="Pembrolizumab",
+            drug_names=("Nivolumab", "Ipilimumab"),
+        )
+
+
+def test_plan_model_rejects_comparison_values_that_do_not_match_its_filters() -> None:
+    with pytest.raises(ModelValidationError, match="must match"):
+        QueryPlan(
+            filters=TrialFilters(
+                condition="Melanoma",
+                drug_names=("Pembrolizumab", "Nivolumab"),
+            ),
+            chart_type=ChartType.GROUPED_BAR_CHART,
+            group_by=GroupBy.TRIAL_PHASE,
+            series_by=GroupBy.INTERVENTION,
+            comparison_values=("Pembrolizumab", "Ipilimumab"),
+        )
+
+
 @pytest.mark.parametrize(
     "query",
     ["", "   "],

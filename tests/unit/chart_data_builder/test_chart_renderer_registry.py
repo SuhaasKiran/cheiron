@@ -34,6 +34,7 @@ def make_record(
     conditions: tuple[str, ...] = (),
     investigators: tuple[str, ...] = (),
     sites: tuple[str, ...] = (),
+    countries: tuple[str, ...] = (),
 ) -> TrialRecord:
     return TrialRecord(
         nct_id=nct_id,
@@ -42,7 +43,7 @@ def make_record(
         interventions=interventions,
         sponsor=sponsor,
         recruitment_status=None,
-        countries=(),
+        countries=countries,
         source_fields={"nct_id": nct_id},
         conditions=conditions,
         investigators=investigators,
@@ -90,6 +91,55 @@ def test_default_registry_builds_a_grouped_bar_chart() -> None:
         {"trial_phase": "PHASE1", "sponsor": "Sponsor A", "trial_count": 1},
         {"trial_phase": "PHASE1", "sponsor": "Sponsor B", "trial_count": 1},
         {"trial_phase": "PHASE2", "sponsor": "Sponsor A", "trial_count": 1},
+    )
+
+
+def test_grouped_bar_chart_limits_an_explicit_drug_comparison_to_named_drugs() -> None:
+    plan = QueryPlan(
+        filters=TrialFilters(
+            condition="Melanoma",
+            drug_names=("Pembrolizumab", "Nivolumab"),
+        ),
+        chart_type=ChartType.GROUPED_BAR_CHART,
+        group_by=GroupBy.TRIAL_PHASE,
+        series_by=GroupBy.INTERVENTION,
+        comparison_values=("Pembrolizumab", "Nivolumab"),
+    )
+
+    response = ChartDataBuilder().build(
+        plan,
+        (
+            make_record(
+                "NCT00000001",
+                phases=("PHASE2",),
+                interventions=("Pembrolizumab", "Other drug"),
+            ),
+            make_record(
+                "NCT00000002",
+                phases=("PHASE2",),
+                interventions=("Nivolumab",),
+            ),
+        ),
+    )
+
+    assert response.visualization.data == (
+        {"trial_phase": "PHASE2", "intervention": "Nivolumab", "trial_count": 1},
+        {"trial_phase": "PHASE2", "intervention": "Pembrolizumab", "trial_count": 1},
+    )
+
+
+def test_bar_chart_groups_trials_by_country() -> None:
+    response = ChartDataBuilder().build(
+        make_plan(ChartType.BAR_CHART, GroupBy.COUNTRY),
+        (
+            make_record("NCT00000001", countries=("United States", "Canada")),
+            make_record("NCT00000002", countries=("United States",)),
+        ),
+    )
+
+    assert response.visualization.data == (
+        {"country": "Canada", "trial_count": 1},
+        {"country": "United States", "trial_count": 2},
     )
 
 

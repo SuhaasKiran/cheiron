@@ -166,6 +166,25 @@ def test_flow_validates_plans_retrieves_maps_and_builds_a_chart() -> None:
         {"start_year": 2020, "trial_count": 1},
         {"start_year": 2021, "trial_count": 1},
     )
+    assert response.results[0].meta.to_dict() == {
+        "filters": {"condition": "Melanoma"},
+        "source": "clinicaltrials.gov",
+        "units": "trials",
+        "time_granularity": "year",
+        "grouping": "start_year",
+        "sorting": "start_year_ascending",
+        "source_query": {"query.cond": "Melanoma"},
+        "source_total_count": 2,
+        "retrieved_study_count": 2,
+        "source_trial_ids": ["NCT00000001", "NCT00000002"],
+        "query_plan": {
+            "chart_type": "time_series",
+            "group_by": "start_year",
+            "series_by": None,
+            "measure": "trial_count",
+            "sort": "ascending",
+        },
+    }
 
 
 def test_flow_returns_a_valid_empty_chart_for_a_successful_empty_retrieval() -> None:

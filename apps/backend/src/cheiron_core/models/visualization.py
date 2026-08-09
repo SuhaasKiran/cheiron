@@ -82,6 +82,11 @@ class VisualizationMeta:
     grouping: str | None = None
     sorting: str | None = None
     truncated: bool = False
+    source_query: Mapping[str, str] | None = None
+    source_total_count: int | None = None
+    retrieved_study_count: int | None = None
+    source_trial_ids: tuple[str, ...] | None = None
+    query_plan: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.filters, TrialFilters):
@@ -97,6 +102,52 @@ class VisualizationMeta:
         object.__setattr__(self, "sorting", optional_text(self.sorting, "sorting"))
         if type(self.truncated) is not bool:
             raise ModelValidationError("truncated must be a boolean.")
+        object.__setattr__(
+            self,
+            "source_query",
+            self._freeze_source_query(self.source_query),
+        )
+        for field_name in ("source_total_count", "retrieved_study_count"):
+            value = getattr(self, field_name)
+            if value is not None and (type(value) is not int or value < 0):
+                raise ModelValidationError(
+                    f"{field_name} must be a non-negative integer or None."
+                )
+        if self.source_trial_ids is not None:
+            if not isinstance(self.source_trial_ids, tuple):
+                raise ModelValidationError(
+                    "source_trial_ids must be a tuple of strings."
+                )
+            trial_ids = tuple(
+                require_text(value, "source_trial_ids item", max_length=32)
+                for value in self.source_trial_ids
+            )
+            if len(set(trial_ids)) != len(trial_ids):
+                raise ModelValidationError(
+                    "source_trial_ids must not contain duplicates."
+                )
+            object.__setattr__(self, "source_trial_ids", trial_ids)
+        object.__setattr__(
+            self,
+            "query_plan",
+            None
+            if self.query_plan is None
+            else freeze_json_record(self.query_plan, "query_plan"),
+        )
+
+    @staticmethod
+    def _freeze_source_query(value: object) -> Mapping[str, str] | None:
+        if value is None:
+            return None
+        if not isinstance(value, Mapping):
+            raise ModelValidationError("source_query must be an object or None.")
+        normalized = {
+            require_text(key, "source_query key"): require_text(
+                item, "source_query value", max_length=2_000
+            )
+            for key, item in value.items()
+        }
+        return MappingProxyType(normalized)
 
     def to_dict(self) -> dict[str, object]:
         """Return JSON-ready metadata without empty optional fields."""
@@ -111,6 +162,16 @@ class VisualizationMeta:
                 result[field_name] = value
         if self.truncated:
             result["truncated"] = True
+        if self.source_query is not None:
+            result["source_query"] = dict(self.source_query)
+        for field_name in ("source_total_count", "retrieved_study_count"):
+            value = getattr(self, field_name)
+            if value is not None:
+                result[field_name] = value
+        if self.source_trial_ids is not None:
+            result["source_trial_ids"] = list(self.source_trial_ids)
+        if self.query_plan is not None:
+            result["query_plan"] = dict(self.query_plan)
         return result
 
 

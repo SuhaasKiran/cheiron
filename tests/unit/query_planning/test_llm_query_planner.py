@@ -170,6 +170,27 @@ def test_llm_planner_preserves_explicit_request_filters_over_model_output() -> N
     assert plan.filters == TrialFilters(condition="Melanoma", start_year=2020)
 
 
+def test_llm_planner_uses_the_constrained_multi_drug_plan_without_llm_output() -> None:
+    planner = LlmQueryPlanner(
+        FakeInterpreter(QueryInterpretationProviderError("must not be called"))
+    )
+
+    plan = planner.plan(
+        TrialQueryRequest(
+            query="Compare these drugs by phase.",
+            filters=TrialFilters(
+                condition="Melanoma",
+                drug_names=("Pembrolizumab", "Nivolumab"),
+            ),
+        )
+    )
+
+    assert plan.chart_type is ChartType.GROUPED_BAR_CHART
+    assert plan.group_by is GroupBy.TRIAL_PHASE
+    assert plan.series_by is GroupBy.INTERVENTION
+    assert plan.comparison_values == ("Pembrolizumab", "Nivolumab")
+
+
 def test_llm_planner_rejects_an_inferred_filter_not_in_the_question() -> None:
     planner = LlmQueryPlanner(
         FakeInterpreter(supported_time_series_interpretation(condition="Melanoma"))

@@ -855,6 +855,8 @@ class LlmQueryPlanner:
 
         if not isinstance(request, TrialQueryRequest):
             raise QueryPlanningError("request must be a TrialQueryRequest instance.")
+        if request.filters.drug_names:
+            return (self._plan_explicit_drug_comparison(request),)
         try:
             interpretations = self._interpreter.interpret(request)
         except QueryInterpretationProviderError as error:
@@ -870,6 +872,39 @@ class LlmQueryPlanner:
             self._plan_interpretation(request, interpretation)
             for interpretation in interpretations.requests
         )
+
+    def _plan_explicit_drug_comparison(
+        self,
+        request: TrialQueryRequest,
+    ) -> QueryPlan:
+        """Build a constrained comparison without asking the LLM to infer scope."""
+
+        question = request.query.casefold()
+        if request.filters.condition is None:
+            raise UnsupportedQueryError(
+                "A multi-drug comparison requires a condition filter to keep the "
+                "source search bounded."
+            )
+        if "compare" not in question and "comparison" not in question:
+            raise UnsupportedQueryError(
+                "Use 'compare' in the question when supplying drug_names."
+            )
+        candidate = QueryPlan(
+            filters=request.filters,
+            chart_type=ChartType.GROUPED_BAR_CHART,
+            group_by=GroupBy.TRIAL_PHASE,
+            series_by=GroupBy.INTERVENTION,
+            comparison_values=request.filters.drug_names,
+            measure=Measure.TRIAL_COUNT,
+            sort=SortOrder.ASCENDING,
+        )
+        try:
+            return replace(candidate, sort=self._chart_registry.default_sort(candidate))
+        except ChartCapabilityError as error:
+            raise UnsupportedQueryError(
+                "This visualization is not supported by the configured chart "
+                f"capabilities: {error}"
+            ) from error
 
     def _plan_interpretation(
         self,
@@ -996,6 +1031,7 @@ class LlmQueryPlanner:
                 if explicit.drug_name is not None
                 else inferred.drug_name
             ),
+            drug_names=explicit.drug_names,
             condition=(
                 explicit.condition
                 if explicit.condition is not None

@@ -36,6 +36,7 @@ _ENTITY_KEYWORDS = (
     (GroupBy.CONDITION, ("condition", "disease")),
     (GroupBy.INVESTIGATOR, ("investigator", "official")),
     (GroupBy.SITE, ("site", "facility")),
+    (GroupBy.COUNTRY, ("country", "countries", "geography", "geographic")),
 )
 
 
@@ -62,6 +63,23 @@ class SimpleQueryPlanner:
             raise QueryPlanningError("request must be a TrialQueryRequest instance.")
 
         query = request.query.casefold()
+        if request.filters.drug_names:
+            if request.filters.condition is None:
+                raise UnsupportedQueryError(
+                    "A multi-drug comparison requires a condition filter to keep "
+                    "the source search bounded."
+                )
+            if "compare" not in query and "comparison" not in query:
+                raise UnsupportedQueryError(
+                    "Use 'compare' in the question when supplying drug_names."
+                )
+            return self._create_plan(
+                request,
+                chart_type=ChartType.GROUPED_BAR_CHART,
+                group_by=GroupBy.TRIAL_PHASE,
+                series_by=GroupBy.INTERVENTION,
+                comparison_values=request.filters.drug_names,
+            )
         asks_for_years = any(pattern in query for pattern in _YEAR_PATTERNS)
         asks_for_phases = any(pattern in query for pattern in _PHASE_PATTERNS)
 
@@ -149,12 +167,14 @@ class SimpleQueryPlanner:
         chart_type: ChartType,
         group_by: GroupBy,
         series_by: GroupBy | None = None,
+        comparison_values: tuple[str, ...] = (),
     ) -> QueryPlan:
         candidate = QueryPlan(
             filters=request.filters,
             chart_type=chart_type,
             group_by=group_by,
             series_by=series_by,
+            comparison_values=comparison_values,
             measure=Measure.TRIAL_COUNT,
             sort=SortOrder.ASCENDING,
         )

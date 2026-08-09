@@ -143,6 +143,28 @@ def test_retriever_uses_open_ended_dates_and_allows_an_unfiltered_plan() -> None
     assert client.calls[2][0] == {}
 
 
+def test_retriever_keeps_multi_drug_comparison_retrieval_condition_scoped() -> None:
+    client = FakeStudySearchClient(
+        ClinicalTrialsSearchResult(
+            studies=(), total_count=0, pages_fetched=0, truncated=False
+        )
+    )
+    plan = QueryPlan(
+        filters=TrialFilters(
+            condition="Melanoma",
+            drug_names=("Pembrolizumab", "Nivolumab"),
+        ),
+        chart_type=ChartType.GROUPED_BAR_CHART,
+        group_by=GroupBy.TRIAL_PHASE,
+        series_by=GroupBy.INTERVENTION,
+        comparison_values=("Pembrolizumab", "Nivolumab"),
+    )
+
+    TrialRetriever(client).retrieve(plan)
+
+    assert client.calls[0][0] == {"query.cond": "Melanoma"}
+
+
 def test_retriever_converts_an_api_failure_to_a_clear_application_error() -> None:
     client = FakeStudySearchClient(
         ClinicalTrialsApiTransportError("ClinicalTrials.gov could not be reached.")

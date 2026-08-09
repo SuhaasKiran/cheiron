@@ -284,7 +284,13 @@ class GroupedBarChartRenderer:
     ) -> VisualizationResponse:
         if plan.series_by is None:
             raise AssertionError("validated grouped bar plans require series_by.")
-        data = _grouped_counts(records, plan.group_by, plan.series_by, plan.sort)
+        data = _grouped_counts(
+            records,
+            plan.group_by,
+            plan.series_by,
+            plan.sort,
+            comparison_values=plan.comparison_values,
+        )
         return VisualizationResponse(
             visualization=VisualizationSpec(
                 chart_type=self.chart_type,
@@ -506,6 +512,8 @@ def _values_for(record: TrialRecord, group_by: GroupBy) -> tuple[str | int, ...]
         values = record.conditions
     elif group_by is GroupBy.INVESTIGATOR:
         values = record.investigators
+    elif group_by is GroupBy.COUNTRY:
+        values = record.countries
     else:
         values = record.sites
     return values
@@ -530,11 +538,20 @@ def _grouped_counts(
     group_by: GroupBy,
     series_by: GroupBy,
     sort: SortOrder,
+    *,
+    comparison_values: tuple[str, ...] = (),
 ) -> tuple[dict[str, object], ...]:
     counts: Counter[tuple[str | int, str | int]] = Counter()
     for record in records:
         group_values = _bounded_entity_values(record, group_by)
         series_values = _bounded_entity_values(record, series_by)
+        if comparison_values:
+            allowed_values = {value.casefold() for value in comparison_values}
+            series_values = tuple(
+                value
+                for value in series_values
+                if isinstance(value, str) and value.casefold() in allowed_values
+            )
         for group_value in group_values:
             for series_value in series_values:
                 pair = (group_value, series_value)
@@ -609,6 +626,7 @@ def _display_name(group_by: GroupBy) -> str:
         GroupBy.CONDITION: "Condition",
         GroupBy.INVESTIGATOR: "Investigator",
         GroupBy.SITE: "Site",
+        GroupBy.COUNTRY: "Country",
     }
     return labels[group_by]
 

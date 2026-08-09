@@ -23,6 +23,20 @@ def test_validator_builds_a_normalized_request_from_a_valid_payload() -> None:
     )
 
 
+def test_validator_accepts_a_bounded_drug_comparison_list() -> None:
+    request = RequestValidator().validate(
+        {
+            "query": "Compare these drugs by phase.",
+            "filters": {
+                "condition": "Melanoma",
+                "drug_names": ["Pembrolizumab", "Nivolumab"],
+            },
+        }
+    )
+
+    assert request.filters.drug_names == ("Pembrolizumab", "Nivolumab")
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
@@ -31,6 +45,10 @@ def test_validator_builds_a_normalized_request_from_a_valid_payload() -> None:
         ({"query": "trials by phase", "filters": []}, "filters must be an object"),
         ({"query": "trials by phase", "filters": {"start_year": True}}, "integer"),
         ({"filters": {}}, "query"),
+        (
+            {"query": "compare drugs", "filters": {"drug_names": []}},
+            "at least two",
+        ),
     ],
 )
 def test_validator_rejects_an_invalid_payload_shape(

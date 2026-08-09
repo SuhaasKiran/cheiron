@@ -30,6 +30,7 @@ class GroupBy(StrEnum):
     CONDITION = "condition"
     INVESTIGATOR = "investigator"
     SITE = "site"
+    COUNTRY = "country"
 
 
 class Measure(StrEnum):
@@ -53,6 +54,7 @@ class QueryPlan:
     chart_type: ChartType
     group_by: GroupBy
     series_by: GroupBy | None = None
+    comparison_values: tuple[str, ...] = ()
     measure: Measure = Measure.TRIAL_COUNT
     sort: SortOrder = SortOrder.ASCENDING
 
@@ -67,6 +69,36 @@ class QueryPlan:
             raise ModelValidationError(
                 "series_by must be a supported GroupBy value or None."
             )
+        if not isinstance(self.comparison_values, tuple):
+            raise ModelValidationError("comparison_values must be a tuple of strings.")
+        if self.comparison_values:
+            if self.chart_type is not ChartType.GROUPED_BAR_CHART:
+                raise ModelValidationError(
+                    "comparison_values are supported only by grouped_bar_chart."
+                )
+            if self.series_by is not GroupBy.INTERVENTION:
+                raise ModelValidationError(
+                    "comparison_values require series_by=intervention."
+                )
+            if not 2 <= len(self.comparison_values) <= 5:
+                raise ModelValidationError(
+                    "comparison_values must contain from 2 to 5 values."
+                )
+            normalized = tuple(
+                value.strip() if isinstance(value, str) else ""
+                for value in self.comparison_values
+            )
+            if not all(normalized) or len(
+                {value.casefold() for value in normalized}
+            ) != len(normalized):
+                raise ModelValidationError(
+                    "comparison_values must be distinct non-empty strings."
+                )
+            if normalized != self.filters.drug_names:
+                raise ModelValidationError(
+                    "comparison_values must match filters.drug_names."
+                )
+            object.__setattr__(self, "comparison_values", normalized)
         if not isinstance(self.measure, Measure):
             raise ModelValidationError("measure must be a supported Measure value.")
         if not isinstance(self.sort, SortOrder):

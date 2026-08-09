@@ -41,6 +41,32 @@ def test_planner_creates_a_phase_distribution_plan() -> None:
     assert plan.sort is SortOrder.DESCENDING
 
 
+def test_planner_creates_a_constrained_multi_drug_comparison_plan() -> None:
+    plan = SimpleQueryPlanner().plan(
+        TrialQueryRequest(
+            query="Compare these drugs by phase.",
+            filters=TrialFilters(
+                condition="Melanoma",
+                drug_names=("Pembrolizumab", "Nivolumab"),
+            ),
+        )
+    )
+
+    assert plan.chart_type is ChartType.GROUPED_BAR_CHART
+    assert plan.group_by is GroupBy.TRIAL_PHASE
+    assert plan.series_by is GroupBy.INTERVENTION
+    assert plan.comparison_values == ("Pembrolizumab", "Nivolumab")
+
+
+def test_planner_supports_country_grouping() -> None:
+    plan = SimpleQueryPlanner().plan(
+        TrialQueryRequest(query="Show trials by country for melanoma.")
+    )
+
+    assert plan.chart_type is ChartType.BAR_CHART
+    assert plan.group_by is GroupBy.COUNTRY
+
+
 @pytest.mark.parametrize(
     ("query", "chart_type", "group_by", "series_by"),
     [

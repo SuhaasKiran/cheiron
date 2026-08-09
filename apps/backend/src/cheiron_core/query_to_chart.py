@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from typing import Protocol
 
 from cheiron_core.clinicaltrials import map_trial_records
@@ -211,9 +212,40 @@ class QueryToChartFlow:
 
         records = self._record_mapper(retrieval.studies)
         response = self._chart_data_builder.build(plan, records)
+        response = self._with_provenance(response, plan, retrieval, records)
         _LOGGER.debug(
             "chart_flow_completed chart_type=%s data_points=%d",
             response.visualization.chart_type.value,
             len(response.visualization.data),
         )
         return response
+
+    @staticmethod
+    def _with_provenance(
+        response: VisualizationResponse,
+        plan: QueryPlan,
+        retrieval: TrialRetrievalResult,
+        records: tuple[TrialRecord, ...],
+    ) -> VisualizationResponse:
+        """Attach compact source and planning context to a successful chart."""
+
+        query_plan: dict[str, object] = {
+            "chart_type": plan.chart_type.value,
+            "group_by": plan.group_by.value,
+            "series_by": plan.series_by.value if plan.series_by is not None else None,
+            "measure": plan.measure.value,
+            "sort": plan.sort.value,
+        }
+        if plan.comparison_values:
+            query_plan["comparison_values"] = list(plan.comparison_values)
+        return replace(
+            response,
+            meta=replace(
+                response.meta,
+                source_query=retrieval.query_parameters,
+                source_total_count=retrieval.total_count,
+                retrieved_study_count=len(records),
+                source_trial_ids=tuple(sorted({record.nct_id for record in records})),
+                query_plan=query_plan,
+            ),
+        )

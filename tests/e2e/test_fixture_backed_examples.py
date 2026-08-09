@@ -172,6 +172,21 @@ def test_extended_charts_match_the_full_local_http_flow(
                     "units": "trials",
                     "grouping": expected_grouping,
                     "sorting": expected_sorting,
+                    "source_query": {"query.cond": "Congenital Adrenal Hyperplasia"},
+                    "source_total_count": 1,
+                    "retrieved_study_count": 1,
+                    "source_trial_ids": ["NCT00000102"],
+                    "query_plan": {
+                        "chart_type": expected_visualization["type"],
+                        "group_by": expected_grouping.split(",")[0],
+                        "series_by": (
+                            expected_grouping.split(",")[1]
+                            if "," in expected_grouping
+                            else None
+                        ),
+                        "measure": "trial_count",
+                        "sort": "ascending",
+                    },
                 },
             }
         ]
@@ -221,3 +236,49 @@ def test_multiple_chart_results_use_real_fixture_retrieval_and_serialization() -
         tuple(sorted(parse_qs(urlparse(url).query)["query.cond"]))
         for url in transport.urls
     } == {("Lung cancer",), ("Melanoma",)}
+
+
+def test_explicit_multi_drug_comparison_uses_the_full_http_flow() -> None:
+    client, transport = make_fixture_client()
+
+    response = client.post(
+        "/api/v1/charts",
+        json={
+            "query": "Compare these drugs by phase.",
+            "filters": {
+                "condition": "Congenital Adrenal Hyperplasia",
+                "drug_names": ["Nifedipine", "Not present"],
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()["results"][0]
+    assert result["visualization"] == {
+        "type": "grouped_bar_chart",
+        "title": "Trials by Phase and Intervention",
+        "encoding": {
+            "x": "trial_phase",
+            "y": "trial_count",
+            "series": "intervention",
+        },
+        "data": [
+            {
+                "trial_phase": "PHASE1",
+                "intervention": "Nifedipine",
+                "trial_count": 1,
+            },
+            {
+                "trial_phase": "PHASE2",
+                "intervention": "Nifedipine",
+                "trial_count": 1,
+            },
+        ],
+    }
+    assert result["meta"]["query_plan"]["comparison_values"] == [
+        "Nifedipine",
+        "Not present",
+    ]
+    assert parse_qs(urlparse(transport.urls[0]).query)["query.cond"] == [
+        "Congenital Adrenal Hyperplasia"
+    ]

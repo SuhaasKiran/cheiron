@@ -9,7 +9,7 @@ from cheiron_core.models import ModelValidationError, TrialFilters, TrialQueryRe
 
 _REQUEST_FIELDS = frozenset({"query", "filters"})
 _FILTER_FIELDS = frozenset(
-    {"drug_name", "condition", "trial_phase", "start_year", "end_year"}
+    {"drug_name", "drug_names", "condition", "trial_phase", "start_year", "end_year"}
 )
 
 
@@ -42,6 +42,9 @@ class RequestValidator:
                 filters=TrialFilters(
                     drug_name=self._optional_text(
                         filters.get("drug_name"), "drug_name"
+                    ),
+                    drug_names=self._optional_text_list(
+                        filters.get("drug_names"), "drug_names"
                     ),
                     condition=self._optional_text(
                         filters.get("condition"), "condition"
@@ -101,6 +104,18 @@ class RequestValidator:
         if type(value) is not int:
             raise RequestValidationError(f"{field_name} must be an integer year.")
         return value
+
+    @classmethod
+    def _optional_text_list(cls, value: object, field_name: str) -> tuple[str, ...]:
+        if value is None:
+            return ()
+        if not isinstance(value, list):
+            raise RequestValidationError(f"{field_name} must be an array of strings.")
+        if not value:
+            raise RequestValidationError(
+                f"{field_name} must contain at least two values."
+            )
+        return tuple(cls._require_text(item, f"{field_name} item") for item in value)
 
     @staticmethod
     def _reject_unknown_fields(
