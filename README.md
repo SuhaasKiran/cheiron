@@ -251,28 +251,6 @@ when ClinicalTrials.gov or the optional LLM service is temporarily unavailable.
   replicas. With more time, I would use a shared rate limiter and add production
   metrics and alerts for source failures, retries, and limit rejections.
 
-## Public deployment settings
-
-For a browser frontend, set the exact allowed origin in
-`CHEIRON_CORS_ALLOWED_ORIGINS`. Do not use a wildcard. To require callers to
-authenticate, set one or more comma-separated values in `CHEIRON_API_KEYS`; a
-caller must then send the chosen value in the `X-API-Key` header.
-
-`CHEIRON_HTTP_RATE_LIMIT_REQUESTS` and
-`CHEIRON_HTTP_RATE_LIMIT_WINDOW_SECONDS` control the per-client request limit.
-The built-in limiter protects one application process. A deployment with several
-replicas should also use a shared edge or data-store rate limiter.
-
-Keep real API and LangSmith keys in Railway or another deployment secret store,
-never in Git.
-
-For Railway, use this start command so the service listens on Railway's assigned
-port:
-
-```bash
-PYTHONPATH=apps/backend/src uvicorn cheiron_core.http_api:app --host 0.0.0.0 --port $PORT
-```
-
 ## Example runs for the deliverable
 
 The six-case input suite in
