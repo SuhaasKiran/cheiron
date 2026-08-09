@@ -17,8 +17,9 @@ As the project evolves, update this command during the task only when a newly di
 5. Resolve `SHOULD_FIX` findings when they are in scope and safe. If one is intentionally deferred, clearly record the reason and user acceptance before committing.
 6. Do not expand the change solely for a `GOOD_TO_FIX` item. Report it as a suggestion.
 7. Run the full configured local test suite, in addition to the relevant lint, formatting, type, build, and other checks required by `/reviewer`. If any test fails, do **not** commit unless the user explicitly instructs you to ignore the failed test(s); report the failure, its impact, and the explicit exception in the final answer. Do not use `--no-verify` to bypass checks.
-8. Write a new entry in `docs/commit-log.md` before committing. Include that log entry in the same focused commit.
-9. Stage only the intended files, create one atomic commit, then report its hash, message, included files, checks run, and any explicitly accepted residual risk. Because `/docs/` is ignored by this repository, force-stage a new intended documentation file with `git add -f <path>` and confirm it appears in the staged diff.
+8. Stage only the intended files and confirm that no file under `docs/` is staged. The `docs/` directory is local reference material and must never be committed. Then create one atomic commit.
+9. Only after the commit succeeds, write a new entry in `docs/commit-log.md`. It is a local, personal record: do not stage, commit, or push it.
+10. Report the commit hash, message, included files, checks run, and any explicitly accepted residual risk.
 
 ## Commit message format
 
@@ -53,7 +54,7 @@ Keep the summary short, specific, and written in the imperative mood. Do not use
 
 ## Commit log entry
 
-For every commit, add an entry at the top of `docs/commit-log.md` using this format:
+After every successful commit, add an entry at the top of `docs/commit-log.md` using this format:
 
 ```markdown
 ## YYYY-MM-DD — CATEGORY: short imperative summary
@@ -63,7 +64,7 @@ For every commit, add an entry at the top of `docs/commit-log.md` using this for
 - **Validated:** Tests and checks run, or a clear statement of what could not be run and why.
 ```
 
-The log entry is intentionally included in the same commit as the work it describes. The commit hash is available directly in Git history, so it does not need to be written into the file before the commit exists.
+The log entry is kept only for the user's local reference. Do not stage, commit, or push it. The commit hash is available directly in Git history, so it does not need to be written into the file before the commit exists.
 
 Use plain language and short sentences, but include enough practical detail to make the entry useful to someone reviewing the project later. Avoid unexplained abbreviations, implementation-only jargon, and vague wording such as "updated logic" or "improved code".
 
@@ -71,6 +72,6 @@ Use plain language and short sentences, but include enough practical detail to m
 
 - Never commit secrets, credentials, private keys, local environment files, generated artifacts, or unrelated user changes.
 - Do not amend, force-push, reset, or rewrite history without explicit user instruction.
-- Keep each commit focused: include the implementation, tests, documentation, and commit-log entry needed for one coherent change.
+- Keep each commit focused: include the implementation and tests needed for one coherent change. Never stage or commit files under `docs/`.
 - Do not commit if tests/checks reveal unresolved `MUST_FIX` risk.
 - Always list reviewer findings and full-test-suite results in the final answer, whether or not a commit is created.

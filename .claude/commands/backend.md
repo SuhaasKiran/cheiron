@@ -50,4 +50,4 @@ As the project evolves, update this command during the task only when a newly di
 - Use `/tests` instructions while implementing.
 - Add or update unit tests for every behavior change and contract tests for integrations or schemas.
 - Run the narrowest relevant local tests first, then the affected suite and formatting/type/lint checks available in the repository.
-- Update operational or schema documentation when a public contract changes.
+- Do not add or update files under `docs/` unless the user explicitly requests it. Keep public-contract details clear through code, tests, and concise inline documentation.

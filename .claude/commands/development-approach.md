@@ -37,11 +37,11 @@ For each change:
 - Keep domain logic independent of frameworks, transport, persistence, and external providers.
 - Depend on contracts/interfaces at integration boundaries; keep provider-specific code at the edge.
 - Make dependencies directional. Shared packages must not depend on deployable applications or services.
-- Prefer additive, backward-compatible changes. When a shared contract changes, update documentation and contract tests with every consumer.
+- Prefer additive, backward-compatible changes. When a shared contract changes, update contract tests with every consumer; update files under `docs/` only when the user explicitly asks.
 - Do not create a shared abstraction until at least one real use case justifies it.
 
 ## Definition of ready
 
-Before composing a component into a broader flow, ensure its contract is documented, behavior is tested, failure modes are intelligible, dependencies are explicit, and a consumer does not need undocumented knowledge of its internals.
+Before composing a component into a broader flow, ensure its contract is explicit in code, tests, or concise inline documentation; behavior is tested; failure modes are intelligible; dependencies are explicit; and a consumer does not need undocumented knowledge of its internals.
 
-When you make a design decision with meaningful trade-offs, record it in `docs/`.
+When you make a design decision with meaningful trade-offs, record it near the relevant code or in a requested documentation file.

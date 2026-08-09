@@ -8,6 +8,7 @@ from cheiron_core.models.plan import (
     SortOrder,
 )
 from cheiron_core.models.query import TrialFilters, TrialQueryRequest
+from cheiron_core.models.trial import TrialRecord
 from cheiron_core.models.validation import ModelValidationError
 from cheiron_core.models.visualization import (
     VisualizationMeta,
@@ -24,6 +25,7 @@ __all__ = [
     "SortOrder",
     "TrialFilters",
     "TrialQueryRequest",
+    "TrialRecord",
     "VisualizationMeta",
     "VisualizationResponse",
     "VisualizationSpec",

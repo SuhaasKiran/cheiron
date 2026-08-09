@@ -16,7 +16,7 @@ As the project evolves, update this command during the task only when a newly di
 4. Identify the tests to add or update before changing behavior, then use `/tests` throughout implementation.
 5. Implement the smallest correct change. Keep public contracts, dependency direction, and error behavior explicit.
 6. Run the narrowest relevant local checks first, then the affected suite. Report what was run and any remaining validation gap.
-7. Update project documentation when the change affects a public contract, supported behavior, important design decision, or operating procedure.
+7. Do not add or update files under `docs/` unless the user explicitly asks for documentation. Keep required contracts clear through code, tests, and concise inline documentation instead.
 
 ## Command selection
 

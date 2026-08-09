@@ -9,6 +9,11 @@ from cheiron_core.clinicaltrials.api_client import (
     ClinicalTrialsSearchResult,
     JsonHttpTransport,
 )
+from cheiron_core.clinicaltrials.record_mapper import (
+    ClinicalTrialsRecordMappingError,
+    map_trial_record,
+    map_trial_records,
+)
 
 __all__ = [
     "ClinicalTrialsApiClient",
@@ -16,6 +21,9 @@ __all__ = [
     "ClinicalTrialsApiHttpError",
     "ClinicalTrialsApiProtocolError",
     "ClinicalTrialsApiTransportError",
+    "ClinicalTrialsRecordMappingError",
     "ClinicalTrialsSearchResult",
     "JsonHttpTransport",
+    "map_trial_record",
+    "map_trial_records",
 ]

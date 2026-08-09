@@ -7,9 +7,9 @@ Use this command before every commit. Do not create a commit unless the user exp
 ## Review procedure
 
 1. Inspect repository status, staged and unstaged diffs, and the commit history/conventions relevant to the changed files.
-2. Confirm the diff is scoped to the intended change. Identify accidental files, generated artifacts, secrets, unrelated formatting churn, and missing documentation/tests.
-3. Review correctness, edge cases, reliability, security, API/schema compatibility, dependency direction, observability, and maintainability.
-4. Run the narrowest relevant local test, lint, formatting, type, and build checks available in the repository; expand to the affected suite when practical.
+2. Confirm the diff is scoped to the intended change. Identify accidental files, generated artifacts, secrets, unrelated formatting churn, missing tests, and requested-but-missing documentation.
+3. Review correctness, edge cases, reliability, security, API/schema compatibility, dependency direction, observability, and maintainability. Use `/reliability` for any change involving external data or dependencies, data transformation, limits/retries, state, concurrency, or failure handling.
+4. Run the narrowest relevant local test, lint, formatting, type, and build checks available in the repository; expand to the affected suite when practical. Include the focused reliability tests identified by `/reliability`.
 5. Classify every finding using the categories below. Include file/line references, impact, and a concrete recommended correction.
 6. If a commit is requested and no blocking findings remain, stage only the intended files and create one focused, descriptive commit using the repository's established message convention.
 7. After committing, report the commit hash, message, files included, checks run, and any explicitly accepted residual risks.
@@ -35,10 +35,18 @@ Non-blocking issues that should normally be resolved in the current change becau
 
 Optional improvements that do not affect current correctness or safety: naming/readability polish, minor simplification, additional low-risk tests, documentation clarity, or refactors with limited practical value today. Do not expand the commit scope solely to address these unless it is safe and requested.
 
+## Reliability review
+
+When `/reliability` applies, use its checks for data completeness and semantics, external API changes, resource bounds, recovery, observability, and test quality. Include every finding in the normal review report with its file/line, impact, and correction.
+
+- Classify as **MUST_FIX** any silent partial/truncated or corrupted result, unbounded work, unsafe recovery, false success after a dependency failure, data loss, or missing evidence for a critical failure path.
+- Classify as **SHOULD_FIX** incomplete but non-misleading metadata, a missing focused test for a meaningful failure branch, avoidable nondeterminism, weak safe observability, or a likely provider-schema drift issue with a clear low-risk correction.
+- Classify as **GOOD_TO_FIX** extra low-risk edge-case coverage, metric/tracing polish, failure-handling readability, or a future resilience improvement that is not needed for the current component.
+
 ## Commit safeguards
 
 - Never commit generated files, credentials, tokens, private keys, local environments, or unrelated user changes.
 - Do not amend, force-push, reset, or rewrite history without explicit user instruction.
-- Keep a commit atomic: it should contain one coherent, working change with its tests and required documentation.
+- Keep a commit atomic: it should contain one coherent, working change with its tests. Do not stage or commit files under `docs/`.
 - Do not bypass checks or use `--no-verify` merely for convenience. If a check cannot run, disclose it and obtain explicit user direction before committing a change with unresolved MUST_FIX risk.
 - Do not mark a finding resolved without confirming the relevant test or inspection result.

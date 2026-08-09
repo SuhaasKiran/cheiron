@@ -54,7 +54,7 @@ Before coding, identify:
 - Make state transitions and side effects explicit. Preserve idempotency for operations that may be retried.
 - Use deterministic behavior for ordering, time, randomness, and serialization; inject those dependencies when they affect tests.
 - Optimize only with evidence. Preserve clear boundaries before introducing caches, batching, concurrency, or other complexity.
-- Keep public names, errors, and return types predictable; document non-obvious invariants and trade-offs near the boundary or in `docs/`.
+- Keep public names, errors, and return types predictable; document non-obvious invariants and trade-offs near the boundary. Add or update files under `docs/` only when the user explicitly requests it.
 
 ## Error handling and logging
 
