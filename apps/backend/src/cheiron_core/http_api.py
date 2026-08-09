@@ -32,7 +32,9 @@ DEFAULT_MAX_REQUEST_BYTES = 8_192
 DEFAULT_MAX_RESPONSE_BYTES = 1_048_576
 
 _JSON_CONTENT_TYPE = "application/json"
-_LOGGER = logging.getLogger(__name__)
+# Use Uvicorn's logger hierarchy so application diagnostics are visible when the
+# server is started with `--log-level debug` without configuring another handler.
+_LOGGER = logging.getLogger("uvicorn.error.cheiron_core.http_api")
 
 
 class QueryToChartExecutor(Protocol):
@@ -236,9 +238,22 @@ def create_http_api(
     async def create_chart(request: Request) -> Response:
         """Parse one JSON request and return the flow's visualization response."""
 
+        _LOGGER.debug(
+            "chart_request_received has_content_length=%s",
+            "content-length" in request.headers,
+        )
         _validate_content_type(request.headers.get("content-type"))
         payload = await _parse_request_json(request)
+        _LOGGER.debug(
+            "chart_request_json_parsed payload_type=%s",
+            type(payload).__name__,
+        )
         chart_response = await run_in_threadpool(flow.execute, payload)
+        _LOGGER.debug(
+            "chart_request_completed chart_type=%s data_points=%d",
+            chart_response.visualization.chart_type.value,
+            len(chart_response.visualization.data),
+        )
         return _success_response(chart_response, max_response_bytes)
 
     return app

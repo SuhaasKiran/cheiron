@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -9,6 +10,7 @@ from typing import Protocol
 
 from cheiron_core.clinicaltrials import (
     ClinicalTrialsApiError,
+    ClinicalTrialsApiHttpError,
     ClinicalTrialsSearchResult,
 )
 from cheiron_core.models import QueryPlan
@@ -20,6 +22,7 @@ MAX_RETRIEVAL_STUDIES = 1_000
 _SUPPORTED_TRIAL_PHASES = frozenset(
     {"EARLY_PHASE1", "PHASE1", "PHASE2", "PHASE3", "PHASE4", "NA"}
 )
+_LOGGER = logging.getLogger("uvicorn.error.cheiron_core.trial_retrieval")
 
 
 class TrialRetrievalError(RuntimeError):
@@ -52,8 +55,19 @@ class TrialRetrievalResult:
     pages_fetched: int
     truncated: bool
     query_parameters: Mapping[str, str]
+    max_studies: int | None = None
+    has_more_results: bool | None = None
 
     def __post_init__(self) -> None:
+        if self.max_studies is not None and (
+            type(self.max_studies) is not int or self.max_studies <= 0
+        ):
+            raise ValueError("max_studies must be a positive integer or None.")
+        if (
+            self.has_more_results is not None
+            and type(self.has_more_results) is not bool
+        ):
+            raise ValueError("has_more_results must be a boolean or None.")
         object.__setattr__(
             self,
             "query_parameters",
@@ -82,6 +96,13 @@ class TrialRetriever:
             raise TrialRetrievalError("plan must be a QueryPlan instance.")
 
         query_parameters = self._build_query_parameters(plan)
+        parameter_names = ",".join(sorted(query_parameters)) or "none"
+        _LOGGER.debug(
+            "trial_retrieval_started parameter_names=%s page_size=%d max_studies=%d",
+            parameter_names,
+            self._page_size,
+            self._max_studies,
+        )
         try:
             search_result = self._api_client.fetch_studies(
                 query_parameters,
@@ -89,9 +110,27 @@ class TrialRetriever:
                 max_studies=self._max_studies,
             )
         except ClinicalTrialsApiError as error:
+            status_code = (
+                error.status_code
+                if isinstance(error, ClinicalTrialsApiHttpError)
+                else None
+            )
+            _LOGGER.debug(
+                "trial_retrieval_dependency_mapped error_type=%s status_code=%s",
+                type(error).__name__,
+                status_code,
+            )
             raise TrialRetrievalDependencyError(
                 "ClinicalTrials.gov could not retrieve trial records."
             ) from error
+
+        _LOGGER.debug(
+            "trial_retrieval_completed studies=%d total_count=%s pages=%d truncated=%s",
+            len(search_result.studies),
+            search_result.total_count,
+            search_result.pages_fetched,
+            search_result.truncated,
+        )
 
         return TrialRetrievalResult(
             studies=search_result.studies,
@@ -99,6 +138,8 @@ class TrialRetriever:
             pages_fetched=search_result.pages_fetched,
             truncated=search_result.truncated,
             query_parameters=query_parameters,
+            max_studies=self._max_studies,
+            has_more_results=search_result.has_more_results,
         )
 
     @staticmethod

@@ -1,0 +1,6 @@
+{
+  "query": "Show trials by phase.",
+  "filters": {
+    "condition": "Congenital Adrenal Hyperplasia"
+  }
+}

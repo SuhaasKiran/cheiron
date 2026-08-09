@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable
 from typing import Protocol
 
@@ -53,6 +54,8 @@ class TrialChartDataBuilder(Protocol):
 
 TrialRecordsMapper = Callable[[Iterable[object]], tuple[TrialRecord, ...]]
 
+_LOGGER = logging.getLogger("uvicorn.error.cheiron_core.query_to_chart")
+
 
 class QueryToChartFlow:
     """Run the minimal, framework-independent request-to-chart use case.
@@ -81,12 +84,62 @@ class QueryToChartFlow:
         """Turn one external request payload into one complete chart response."""
 
         request = self._request_validator.validate(payload)
+        filter_names = ",".join(sorted(request.filters.to_dict())) or "none"
+        _LOGGER.debug("chart_flow_validated filter_names=%s", filter_names)
         plan = self._query_planner.plan(request)
+        _LOGGER.debug(
+            "chart_flow_planned chart_type=%s group_by=%s",
+            plan.chart_type.value,
+            plan.group_by.value,
+        )
         retrieval = self._trial_retriever.retrieve(plan)
+        total_count = (
+            str(retrieval.total_count)
+            if retrieval.total_count is not None
+            else "unknown"
+        )
+        has_more_results = (
+            str(retrieval.has_more_results).lower()
+            if retrieval.has_more_results is not None
+            else "unknown"
+        )
+        _LOGGER.debug(
+            "chart_flow_retrieval_finished "
+            "retrieved_studies=%d source_total_count=%s pages_fetched=%d "
+            "configured_max_studies=%s truncated=%s",
+            len(retrieval.studies),
+            total_count,
+            retrieval.pages_fetched,
+            retrieval.max_studies,
+            retrieval.truncated,
+        )
         if retrieval.truncated:
+            truncation_reason = (
+                "configured_max_studies_reached"
+                if retrieval.max_studies is not None
+                and len(retrieval.studies) >= retrieval.max_studies
+                else "source_result_truncated"
+            )
+            _LOGGER.warning(
+                "chart_flow_retrieval_incomplete reason=%s retrieved_studies=%d "
+                "configured_max_studies=%s pages_fetched=%d "
+                "source_total_count=%s source_has_more_results=%s",
+                truncation_reason,
+                len(retrieval.studies),
+                retrieval.max_studies,
+                retrieval.pages_fetched,
+                total_count,
+                has_more_results,
+            )
             raise IncompleteTrialRetrievalError(
                 "Trial retrieval was truncated, so a complete chart cannot be built."
             )
 
         records = self._record_mapper(retrieval.studies)
-        return self._chart_data_builder.build(plan, records)
+        response = self._chart_data_builder.build(plan, records)
+        _LOGGER.debug(
+            "chart_flow_completed chart_type=%s data_points=%d",
+            response.visualization.chart_type.value,
+            len(response.visualization.data),
+        )
+        return response

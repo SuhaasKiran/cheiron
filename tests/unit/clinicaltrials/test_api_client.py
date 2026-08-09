@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from urllib.parse import parse_qs, urlparse
@@ -9,6 +10,7 @@ from cheiron_core.clinicaltrials import (
     ClinicalTrialsApiClient,
     ClinicalTrialsApiError,
     ClinicalTrialsApiHttpError,
+    ClinicalTrialsApiTransportError,
 )
 
 
@@ -23,6 +25,18 @@ class FakeJsonTransport:
         if isinstance(response, Exception):
             raise response
         return response
+
+
+class TimeoutTransport:
+    """Raise a locally controlled timeout through the production error boundary."""
+
+    def get_json(self, url: str, *, timeout_seconds: float) -> object:
+        try:
+            raise TimeoutError("source request timed out")
+        except TimeoutError as error:
+            raise ClinicalTrialsApiTransportError(
+                "ClinicalTrials.gov could not be reached."
+            ) from error
 
 
 def test_fetch_studies_builds_a_json_search_request() -> None:
@@ -51,6 +65,7 @@ def test_fetch_studies_builds_a_json_search_request() -> None:
     assert result.total_count == 1
     assert result.pages_fetched == 1
     assert result.truncated is False
+    assert result.has_more_results is False
 
 
 def test_fetch_studies_follows_pagination_tokens() -> None:
@@ -75,6 +90,7 @@ def test_fetch_studies_follows_pagination_tokens() -> None:
     assert parse_qs(urlparse(transport.urls[1]).query)["pageToken"] == ["second-page"]
     assert result.pages_fetched == 2
     assert result.truncated is False
+    assert result.has_more_results is False
 
 
 def test_fetch_studies_stops_at_the_requested_record_limit() -> None:
@@ -95,10 +111,13 @@ def test_fetch_studies_stops_at_the_requested_record_limit() -> None:
 
     assert [study["id"] for study in result.studies] == ["first", "second"]
     assert result.truncated is True
+    assert result.has_more_results is True
     assert len(transport.urls) == 1
 
 
-def test_fetch_studies_retries_a_transient_http_failure() -> None:
+def test_fetch_studies_retries_a_transient_http_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     transport = FakeJsonTransport(
         responses=[
             ClinicalTrialsApiHttpError(status_code=429),
@@ -111,12 +130,66 @@ def test_fetch_studies_retries_a_transient_http_failure() -> None:
         base_url="https://api.example.test/v2/studies",
         sleeper=delays.append,
     )
+    caplog.set_level(
+        logging.DEBUG,
+        logger="uvicorn.error.cheiron_core.clinicaltrials.api_client",
+    )
 
     result = client.fetch_studies({})
 
     assert result.studies == ()
     assert len(transport.urls) == 2
     assert delays == [0.25]
+    assert (
+        "clinicaltrials_request_retry attempt=1 "
+        "error_type=ClinicalTrialsApiHttpError status_code=429 "
+        "cause_category=http_response" in caplog.messages
+    )
+
+
+def test_fetch_studies_logs_the_final_source_failure_with_its_status(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = ClinicalTrialsApiClient(
+        FakeJsonTransport(responses=[ClinicalTrialsApiHttpError(status_code=400)]),
+        base_url="https://api.example.test/v2/studies",
+    )
+    caplog.set_level(
+        logging.WARNING,
+        logger="uvicorn.error.cheiron_core.clinicaltrials.api_client",
+    )
+
+    with pytest.raises(ClinicalTrialsApiHttpError):
+        client.fetch_studies({})
+
+    assert (
+        "clinicaltrials_request_failed attempts=1 "
+        "error_type=ClinicalTrialsApiHttpError status_code=400 "
+        "cause_category=http_response" in caplog.messages
+    )
+
+
+def test_fetch_studies_logs_a_safe_transport_failure_category(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = ClinicalTrialsApiClient(
+        TimeoutTransport(),
+        base_url="https://api.example.test/v2/studies",
+        max_retries=0,
+    )
+    caplog.set_level(
+        logging.WARNING,
+        logger="uvicorn.error.cheiron_core.clinicaltrials.api_client",
+    )
+
+    with pytest.raises(ClinicalTrialsApiTransportError):
+        client.fetch_studies({})
+
+    assert (
+        "clinicaltrials_request_failed attempts=1 "
+        "error_type=ClinicalTrialsApiTransportError status_code=None "
+        "cause_category=timeout" in caplog.messages
+    )
 
 
 def test_fetch_studies_does_not_retry_a_non_retryable_http_failure() -> None:

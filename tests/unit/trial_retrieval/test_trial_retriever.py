@@ -79,6 +79,8 @@ def test_retriever_translates_plan_filters_and_preserves_search_metadata() -> No
     assert result.total_count == 2_451
     assert result.pages_fetched == 10
     assert result.truncated is True
+    assert result.max_studies == 1_000
+    assert result.has_more_results is None
     assert result.query_parameters == client.calls[0][0]
 
 

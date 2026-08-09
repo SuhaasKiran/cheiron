@@ -43,6 +43,7 @@ As the project evolves, update this command during the task only when a newly di
 - Create FastAPI applications through an app factory. Pass the application flow or a narrow protocol into the factory so tests can use local fakes and routes do not construct dependencies per request.
 - Keep route handlers thin: parse transport input, call the flow once, and return the validated response contract. Use synchronous route functions for synchronous dependencies; if an async route must read the request body before calling synchronous work, run that work in FastAPI's thread pool rather than blocking the event loop.
 - Define stable success and error response shapes. Map expected domain errors with explicit exception handlers; log unexpected failures safely and return a generic internal-error response.
+- Make backend diagnostics visible through the configured server logging hierarchy. Log operation names, safe field names, counts, limits, dependency error types, retries, and truncation; never log raw request bodies, query text, secrets, or provider page tokens.
 - Enforce body and response-size limits at the HTTP boundary. Reject malformed JSON, unsupported media types, invalid methods, and oversized requests before calling the application flow.
 - Test the ASGI application locally with FastAPI's `TestClient`. Cover route and method handling, request parsing, response schema, error status codes, dependency failures, and resource limits without calling live services.
 

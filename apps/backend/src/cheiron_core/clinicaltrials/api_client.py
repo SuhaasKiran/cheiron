@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ MAX_RETRIES = 2
 RETRY_DELAY_SECONDS = 0.25
 _CLIENT_CONTROLLED_PARAMETERS = frozenset({"format", "pageSize", "pageToken"})
 _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+_LOGGER = logging.getLogger("uvicorn.error.cheiron_core.clinicaltrials.api_client")
 
 
 class ClinicalTrialsApiError(RuntimeError):
@@ -87,6 +89,7 @@ class ClinicalTrialsSearchResult:
     total_count: int | None
     pages_fetched: int
     truncated: bool
+    has_more_results: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +135,14 @@ class ClinicalTrialsApiClient:
         parameters = self._validate_query_parameters(query_parameters)
         page_size = self._validate_page_size(page_size)
         max_studies = self._validate_max_studies(max_studies)
+        parameter_names = ",".join(sorted(parameters)) or "none"
+        _LOGGER.debug(
+            "clinicaltrials_request_started "
+            "parameter_names=%s page_size=%d max_studies=%d",
+            parameter_names,
+            page_size,
+            max_studies,
+        )
 
         studies: list[Mapping[str, object]] = []
         seen_page_tokens: set[str] = set()
@@ -139,6 +150,7 @@ class ClinicalTrialsApiClient:
         total_count: int | None = None
         pages_fetched = 0
         truncated = False
+        has_more_results = False
 
         while len(studies) < max_studies:
             request_parameters = dict(parameters)
@@ -148,6 +160,13 @@ class ClinicalTrialsApiClient:
             if page_token is not None:
                 request_parameters["pageToken"] = page_token
 
+            _LOGGER.debug(
+                "clinicaltrials_page_requested "
+                "page_number=%d page_size=%s has_page_token=%s",
+                pages_fetched + 1,
+                request_parameters["pageSize"],
+                page_token is not None,
+            )
             page = self._parse_page(
                 self._get_json_with_retries(self._build_url(request_parameters))
             )
@@ -155,16 +174,27 @@ class ClinicalTrialsApiClient:
             if page.total_count is not None:
                 total_count = page.total_count
 
+            _LOGGER.debug(
+                "clinicaltrials_page_received "
+                "page_number=%d studies=%d total_count=%s has_next_page=%s",
+                pages_fetched,
+                len(page.studies),
+                page.total_count,
+                page.next_page_token is not None,
+            )
+
             remaining_studies = max_studies - len(studies)
             studies.extend(page.studies[:remaining_studies])
             if len(page.studies) > remaining_studies:
                 truncated = True
+                has_more_results = True
 
             page_token = page.next_page_token
             if page_token is None:
                 break
             if len(studies) >= max_studies:
                 truncated = True
+                has_more_results = True
                 break
             if page_token in seen_page_tokens:
                 raise ClinicalTrialsApiProtocolError(
@@ -172,11 +202,20 @@ class ClinicalTrialsApiClient:
                 )
             seen_page_tokens.add(page_token)
 
+        _LOGGER.debug(
+            "clinicaltrials_request_completed "
+            "studies=%d total_count=%s pages=%d truncated=%s",
+            len(studies),
+            total_count,
+            pages_fetched,
+            truncated,
+        )
         return ClinicalTrialsSearchResult(
             studies=tuple(studies),
             total_count=total_count,
             pages_fetched=pages_fetched,
             truncated=truncated,
+            has_more_results=has_more_results,
         )
 
     def _get_json_with_retries(self, url: str) -> object:
@@ -188,10 +227,56 @@ class ClinicalTrialsApiClient:
                 )
             except ClinicalTrialsApiError as error:
                 if not self._should_retry(error, attempt):
+                    status_code = (
+                        error.status_code
+                        if isinstance(error, ClinicalTrialsApiHttpError)
+                        else None
+                    )
+                    _LOGGER.warning(
+                        "clinicaltrials_request_failed "
+                        "attempts=%d error_type=%s status_code=%s "
+                        "cause_category=%s",
+                        attempt + 1,
+                        type(error).__name__,
+                        status_code,
+                        self._cause_category(error),
+                    )
                     raise
+                status_code = (
+                    error.status_code
+                    if isinstance(error, ClinicalTrialsApiHttpError)
+                    else None
+                )
+                _LOGGER.warning(
+                    "clinicaltrials_request_retry "
+                    "attempt=%d error_type=%s status_code=%s "
+                    "cause_category=%s",
+                    attempt + 1,
+                    type(error).__name__,
+                    status_code,
+                    self._cause_category(error),
+                )
                 self._sleeper(self._retry_delay_seconds * (2**attempt))
 
         raise AssertionError("The retry loop must return or raise.")
+
+    @staticmethod
+    def _cause_category(error: ClinicalTrialsApiError) -> str:
+        """Return a safe, stable category for a source-client failure."""
+
+        if isinstance(error, ClinicalTrialsApiHttpError):
+            return "http_response"
+        if not isinstance(error, ClinicalTrialsApiTransportError):
+            return "protocol"
+
+        cause = error.__cause__
+        if isinstance(cause, TimeoutError):
+            return "timeout"
+        if isinstance(cause, URLError):
+            return "timeout" if isinstance(cause.reason, TimeoutError) else "network"
+        if isinstance(cause, (UnicodeDecodeError, json.JSONDecodeError)):
+            return "invalid_json"
+        return "transport"
 
     @staticmethod
     def _parse_page(payload: object) -> _StudyPage:
