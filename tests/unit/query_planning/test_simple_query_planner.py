@@ -42,6 +42,48 @@ def test_planner_creates_a_phase_distribution_plan() -> None:
 
 
 @pytest.mark.parametrize(
+    ("query", "chart_type", "group_by", "series_by"),
+    [
+        (
+            "Create a grouped bar chart of trials by phase and sponsor.",
+            ChartType.GROUPED_BAR_CHART,
+            GroupBy.TRIAL_PHASE,
+            GroupBy.SPONSOR,
+        ),
+        (
+            "Show a scatter plot of trial drugs over time.",
+            ChartType.SCATTER_PLOT,
+            GroupBy.START_YEAR,
+            GroupBy.INTERVENTION,
+        ),
+        (
+            "Show a histogram of trials by start year.",
+            ChartType.HISTOGRAM,
+            GroupBy.START_YEAR,
+            None,
+        ),
+        (
+            "Create a network graph of drugs and sponsors.",
+            ChartType.NETWORK_GRAPH,
+            GroupBy.INTERVENTION,
+            GroupBy.SPONSOR,
+        ),
+    ],
+)
+def test_planner_creates_extended_chart_plans(
+    query: str,
+    chart_type: ChartType,
+    group_by: GroupBy,
+    series_by: GroupBy | None,
+) -> None:
+    plan = SimpleQueryPlanner().plan(TrialQueryRequest(query=query))
+
+    assert plan.chart_type is chart_type
+    assert plan.group_by is group_by
+    assert plan.series_by is series_by
+
+
+@pytest.mark.parametrize(
     "query",
     [
         "List all trials for melanoma.",

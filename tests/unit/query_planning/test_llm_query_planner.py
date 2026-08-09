@@ -3,26 +3,32 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from threading import Event, Thread
 from typing import Any
 
 import pytest
+from cheiron_core.chart_rendering import ChartRendererRegistry, TimeSeriesRenderer
 from cheiron_core.llm_query_planning import (
+    BoundedLlmQueryPlanner,
     ClinicalTrialsGovQuery,
     ClinicalTrialsQueryInterpretation,
     DspyClinicalTrialsQueryInterpreter,
-    FallbackQueryPlanner,
     LangSmithDspyQueryProgramTracer,
+    LlmPlanningCapacityError,
+    LlmPlanningRateLimitError,
     LlmQueryPlanner,
+    LlmQueryPlannerError,
     QueryInterpretationProviderError,
     TracedDspyQueryProgram,
 )
 from cheiron_core.models import (
     ChartType,
     GroupBy,
+    QueryPlan,
     TrialFilters,
     TrialQueryRequest,
 )
-from cheiron_core.query_planning import SimpleQueryPlanner, UnsupportedQueryError
+from cheiron_core.query_planning import UnsupportedQueryError
 from cheiron_core.settings import LangSmithTracingSettings
 
 
@@ -81,16 +87,47 @@ class FakeTraceableFactory:
         return decorate
 
 
+@dataclass
+class BlockingPlanner:
+    """Block one plan call so a capacity rejection can be tested locally."""
+
+    started: Event
+    release: Event
+
+    def plan(self, request: TrialQueryRequest) -> QueryPlan:
+        self.started.set()
+        assert self.release.wait(timeout=1)
+        return QueryPlan(
+            filters=request.filters,
+            chart_type=ChartType.BAR_CHART,
+            group_by=GroupBy.TRIAL_PHASE,
+        )
+
+
+@dataclass
+class FakeClock:
+    """A controllable monotonic clock for rolling-rate-limit tests."""
+
+    now: float = 0
+
+    def __call__(self) -> float:
+        return self.now
+
+
 def supported_time_series_interpretation(
     *,
     condition: str | None = None,
+    trial_phase: str | None = None,
 ) -> ClinicalTrialsQueryInterpretation:
     return ClinicalTrialsQueryInterpretation(
         is_supported=True,
         visualization_needed=True,
         chart_type=ChartType.TIME_SERIES,
         group_by=GroupBy.START_YEAR,
-        clinicaltrials_query=ClinicalTrialsGovQuery(condition=condition),
+        clinicaltrials_query=ClinicalTrialsGovQuery(
+            condition=condition,
+            trial_phase=trial_phase,
+        ),
         reason="The question asks for a count over time.",
     )
 
@@ -124,6 +161,65 @@ def test_llm_planner_preserves_explicit_request_filters_over_model_output() -> N
     assert plan.filters == TrialFilters(condition="Melanoma", start_year=2020)
 
 
+def test_llm_planner_rejects_an_inferred_filter_not_in_the_question() -> None:
+    planner = LlmQueryPlanner(
+        FakeInterpreter(supported_time_series_interpretation(condition="Melanoma"))
+    )
+
+    with pytest.raises(UnsupportedQueryError, match="could not safely verify"):
+        planner.plan(TrialQueryRequest(query="Show trials by year."))
+
+
+def test_llm_planner_rejects_an_inferred_na_phase_in_an_unrelated_word() -> None:
+    planner = LlmQueryPlanner(
+        FakeInterpreter(supported_time_series_interpretation(trial_phase="NA"))
+    )
+
+    with pytest.raises(UnsupportedQueryError, match="could not safely verify"):
+        planner.plan(TrialQueryRequest(query="Show national trials by year."))
+
+
+def test_llm_planner_creates_an_extended_chart_plan() -> None:
+    planner = LlmQueryPlanner(
+        FakeInterpreter(
+            ClinicalTrialsQueryInterpretation(
+                is_supported=True,
+                visualization_needed=True,
+                chart_type=ChartType.NETWORK_GRAPH,
+                group_by=GroupBy.INTERVENTION,
+                series_by=GroupBy.SPONSOR,
+                reason="The question asks for drug and sponsor relationships.",
+            )
+        )
+    )
+
+    plan = planner.plan(
+        TrialQueryRequest(query="Show the network of interventions and sponsors.")
+    )
+
+    assert plan.chart_type is ChartType.NETWORK_GRAPH
+    assert plan.group_by is GroupBy.INTERVENTION
+    assert plan.series_by is GroupBy.SPONSOR
+
+
+def test_llm_planner_rejects_a_chart_disabled_by_the_registry() -> None:
+    planner = LlmQueryPlanner(
+        FakeInterpreter(
+            ClinicalTrialsQueryInterpretation(
+                is_supported=True,
+                visualization_needed=True,
+                chart_type=ChartType.BAR_CHART,
+                group_by=GroupBy.TRIAL_PHASE,
+                reason="The question asks for a phase distribution.",
+            )
+        ),
+        ChartRendererRegistry((TimeSeriesRenderer(),)),
+    )
+
+    with pytest.raises(UnsupportedQueryError, match="bar_chart is not enabled"):
+        planner.plan(TrialQueryRequest(query="Show trials by phase."))
+
+
 @pytest.mark.parametrize(
     "interpretation",
     [
@@ -150,39 +246,60 @@ def test_llm_planner_rejects_non_visual_or_out_of_scope_queries(
         planner.plan(TrialQueryRequest(query="A question"))
 
 
-def test_fallback_planner_uses_keyword_matching_when_the_llm_fails() -> None:
-    planner = FallbackQueryPlanner(
-        primary=LlmQueryPlanner(
-            FakeInterpreter(QueryInterpretationProviderError("provider timed out"))
-        ),
-        fallback=SimpleQueryPlanner(),
+def test_llm_planner_does_not_broaden_query_when_llm_is_unavailable() -> None:
+    planner = LlmQueryPlanner(
+        FakeInterpreter(QueryInterpretationProviderError("provider timed out"))
     )
 
-    plan = planner.plan(
-        TrialQueryRequest(query="How many melanoma trials started each year?")
+    with pytest.raises(LlmQueryPlannerError, match="could not interpret"):
+        planner.plan(TrialQueryRequest(query="Show melanoma trials by phase."))
+
+
+def test_bounded_llm_planner_rejects_work_above_its_concurrency_limit() -> None:
+    started = Event()
+    release = Event()
+    planner = BoundedLlmQueryPlanner(
+        BlockingPlanner(started, release),
+        max_concurrent_requests=1,
+        max_requests_per_minute=10,
     )
+    request = TrialQueryRequest(query="Show trials by phase.")
+    completed_plans: list[QueryPlan] = []
+    worker = Thread(target=lambda: completed_plans.append(planner.plan(request)))
 
-    assert plan.chart_type is ChartType.TIME_SERIES
-    assert plan.group_by is GroupBy.START_YEAR
+    worker.start()
+    assert started.wait(timeout=1)
+    with pytest.raises(LlmPlanningCapacityError, match="at capacity"):
+        planner.plan(request)
+
+    release.set()
+    worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    assert len(completed_plans) == 1
+    assert planner.plan(request).chart_type is ChartType.BAR_CHART
 
 
-def test_fallback_planner_does_not_override_an_llm_unsupported_decision() -> None:
-    planner = FallbackQueryPlanner(
-        primary=LlmQueryPlanner(
-            FakeInterpreter(
-                ClinicalTrialsQueryInterpretation(
-                    is_supported=False,
-                    visualization_needed=False,
-                    clinicaltrials_query=ClinicalTrialsGovQuery(),
-                    reason="The question is incomplete.",
-                )
-            )
-        ),
-        fallback=SimpleQueryPlanner(),
+def test_bounded_llm_planner_rejects_work_above_its_request_rate_limit() -> None:
+    clock = FakeClock()
+    release = Event()
+    release.set()
+    planner = BoundedLlmQueryPlanner(
+        BlockingPlanner(Event(), release),
+        max_concurrent_requests=1,
+        max_requests_per_minute=2,
+        clock=clock,
     )
+    request = TrialQueryRequest(query="Show trials by phase.")
 
-    with pytest.raises(UnsupportedQueryError, match="incomplete"):
-        planner.plan(TrialQueryRequest(query="Show trials by phase."))
+    planner.plan(request)
+    planner.plan(request)
+    with pytest.raises(LlmPlanningRateLimitError, match="request rate limit") as error:
+        planner.plan(request)
+
+    assert error.value.retry_after_seconds == 60
+    clock.now = 60
+    assert planner.plan(request).chart_type is ChartType.BAR_CHART
 
 
 def test_dspy_interpreter_validates_the_program_json_response() -> None:
@@ -210,6 +327,169 @@ def test_dspy_interpreter_validates_the_program_json_response() -> None:
     assert interpretation.clinicaltrials_query.condition == "Melanoma"
 
 
+def test_dspy_interpreter_normalizes_extended_chart_terms() -> None:
+    interpreter = DspyClinicalTrialsQueryInterpreter(
+        FakeDspyProgram(
+            """
+            {
+              "is_supported": true,
+              "visualization_needed": true,
+              "chart_type": "network",
+              "group_by": "conditions",
+              "series_by": "sites",
+              "clinicaltrials_query": {},
+              "reason": "The question requests condition and site relationships."
+            }
+            """
+        )
+    )
+
+    interpretation = interpreter.interpret(
+        TrialQueryRequest(query="Show conditions connected to sites.")
+    )
+
+    assert interpretation.chart_type is ChartType.NETWORK_GRAPH
+    assert interpretation.group_by is GroupBy.CONDITION
+    assert interpretation.series_by is GroupBy.SITE
+
+
+@pytest.mark.parametrize(
+    ("model_output", "chart_type", "group_by", "series_by"),
+    [
+        (
+            """
+            {
+              "is_supported": true,
+              "visualization_needed": true,
+              "visualization_type": "grouped bar",
+              "group": "phase",
+              "series": "sponsors",
+              "clinicaltrials_query": {},
+              "reason": "Compare trial phases across sponsors."
+            }
+            """,
+            ChartType.GROUPED_BAR_CHART,
+            GroupBy.TRIAL_PHASE,
+            GroupBy.SPONSOR,
+        ),
+        (
+            """
+            {
+              "is_supported": true,
+              "visualization_needed": true,
+              "chart_type": "scatter plot",
+              "x_field": "start year",
+              "y_field": "intervention count",
+              "clinicaltrials_query": {},
+              "reason": "Compare intervention counts over start years."
+            }
+            """,
+            ChartType.SCATTER_PLOT,
+            GroupBy.START_YEAR,
+            GroupBy.INTERVENTION,
+        ),
+        (
+            """
+            {
+              "is_supported": true,
+              "visualization_needed": true,
+              "chart_type": "network",
+              "source_entity": "sponsors",
+              "target_entity": "drugs",
+              "clinicaltrials_query": {},
+              "reason": "Connect sponsors to interventions."
+            }
+            """,
+            ChartType.NETWORK_GRAPH,
+            GroupBy.SPONSOR,
+            GroupBy.INTERVENTION,
+        ),
+        (
+            """
+            {
+              "is_supported": true,
+              "visualization_needed": true,
+              "visualization": {
+                "type": "line-chart",
+                "grouping": "start year"
+              },
+              "clinicaltrials_gov_query": {},
+              "reason": "Show how trials change over time."
+            }
+            """,
+            ChartType.TIME_SERIES,
+            GroupBy.START_YEAR,
+            None,
+        ),
+    ],
+)
+def test_dspy_interpreter_normalizes_common_semantic_chart_fields(
+    model_output: str,
+    chart_type: ChartType,
+    group_by: GroupBy,
+    series_by: GroupBy | None,
+) -> None:
+    interpretation = DspyClinicalTrialsQueryInterpreter(
+        FakeDspyProgram(model_output)
+    ).interpret(TrialQueryRequest(query="A clinical-trial visualization question."))
+
+    assert interpretation.chart_type is chart_type
+    assert interpretation.group_by is group_by
+    assert interpretation.series_by is series_by
+
+
+@pytest.mark.parametrize("wrapper_name", ("additional_filters", "other_filters"))
+def test_dspy_interpreter_ignores_empty_legacy_filter_wrappers(
+    wrapper_name: str,
+) -> None:
+    interpreter = DspyClinicalTrialsQueryInterpreter(
+        FakeDspyProgram(
+            f"""
+            {{
+              "is_supported": true,
+              "visualization_needed": true,
+              "chart_type": "time_series",
+              "group_by": "start_year",
+              "series_by": null,
+              "clinicaltrials_query": {{
+                "condition": "Melanoma",
+                "{wrapper_name}": {{}}
+              }},
+              "reason": "Show change in trial counts over time."
+            }}
+            """
+        )
+    )
+
+    interpretation = interpreter.interpret(
+        TrialQueryRequest(query="How have melanoma trials changed over time?")
+    )
+
+    assert interpretation.clinicaltrials_query.condition == "Melanoma"
+
+
+def test_dspy_interpreter_rejects_an_unsupported_nested_filter() -> None:
+    interpreter = DspyClinicalTrialsQueryInterpreter(
+        FakeDspyProgram(
+            """
+            {
+              "is_supported": true,
+              "visualization_needed": true,
+              "chart_type": "bar_chart",
+              "group_by": "trial_phase",
+              "clinicaltrials_query": {
+                "additional_filters": {"sponsor": "Example Sponsor"}
+              },
+              "reason": "Show trial phases."
+            }
+            """
+        )
+    )
+
+    with pytest.raises(QueryInterpretationProviderError, match="extra_forbidden"):
+        interpreter.interpret(TrialQueryRequest(query="Show trials by phase."))
+
+
 def test_dspy_interpreter_wraps_invalid_model_output_as_an_operational_failure() -> (
     None
 ):
@@ -219,6 +499,27 @@ def test_dspy_interpreter_wraps_invalid_model_output_as_an_operational_failure()
         interpreter.interpret(
             TrialQueryRequest(query="Chart melanoma studies by phase.")
         )
+
+
+def test_dspy_interpreter_reports_safe_schema_diagnostics() -> None:
+    interpreter = DspyClinicalTrialsQueryInterpreter(
+        FakeDspyProgram(
+            """
+            {
+              "is_supported": false,
+              "visualization_needed": false,
+              "reason": "Outside scope.",
+              "unexpected": true
+            }
+            """
+        )
+    )
+
+    with pytest.raises(
+        QueryInterpretationProviderError,
+        match=r"schema issues: unexpected:extra_forbidden",
+    ):
+        interpreter.interpret(TrialQueryRequest(query="Chart melanoma trials."))
 
 
 def test_langsmith_tracer_redacts_query_content_and_preserves_dspy_execution() -> None:

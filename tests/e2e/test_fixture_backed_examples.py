@@ -99,3 +99,112 @@ def test_examples_match_the_full_local_http_flow(
     assert len(transport.urls) == 1
     request_parameters = parse_qs(urlparse(transport.urls[0]).query)
     assert request_parameters == expected_query_parameters
+
+
+@pytest.mark.parametrize(
+    (
+        "chart_request",
+        "expected_visualization",
+        "expected_grouping",
+        "expected_sorting",
+    ),
+    (
+        (
+            {
+                "query": "Show a grouped bar chart of phases by sponsor.",
+                "filters": {"condition": "Congenital Adrenal Hyperplasia"},
+            },
+            {
+                "type": "grouped_bar_chart",
+                "title": "Trials by Phase and Sponsor",
+                "encoding": {
+                    "x": "trial_phase",
+                    "y": "trial_count",
+                    "series": "sponsor",
+                },
+                "data": [
+                    {
+                        "trial_phase": "PHASE1",
+                        "sponsor": "National Center for Research Resources (NCRR)",
+                        "trial_count": 1,
+                    },
+                    {
+                        "trial_phase": "PHASE2",
+                        "sponsor": "National Center for Research Resources (NCRR)",
+                        "trial_count": 1,
+                    },
+                ],
+            },
+            "trial_phase,sponsor",
+            "trial_phase_ascending,sponsor_ascending",
+        ),
+        (
+            {
+                "query": "Show a network of interventions and sponsors.",
+                "filters": {"condition": "Congenital Adrenal Hyperplasia"},
+            },
+            {
+                "type": "network_graph",
+                "title": "Trial Network: Intervention to Sponsor",
+                "encoding": {
+                    "node_id": "id",
+                    "source": "source",
+                    "target": "target",
+                    "weight": "trial_count",
+                },
+                "data": [
+                    {
+                        "source": "intervention:Nifedipine",
+                        "target": (
+                            "sponsor:National Center for Research Resources (NCRR)"
+                        ),
+                        "trial_count": 1,
+                    }
+                ],
+                "nodes": [
+                    {
+                        "id": "intervention:Nifedipine",
+                        "label": "Nifedipine",
+                        "type": "intervention",
+                    },
+                    {
+                        "id": "sponsor:National Center for Research Resources (NCRR)",
+                        "label": "National Center for Research Resources (NCRR)",
+                        "type": "sponsor",
+                    },
+                ],
+            },
+            "intervention,sponsor",
+            "source_ascending,target_ascending",
+        ),
+    ),
+)
+def test_extended_charts_match_the_full_local_http_flow(
+    chart_request: dict[str, object],
+    expected_visualization: dict[str, object],
+    expected_grouping: str,
+    expected_sorting: str,
+) -> None:
+    """Exercise validation through HTTP serialization using only saved source data."""
+
+    client, transport = make_fixture_client()
+
+    response = client.post("/api/v1/charts", json=chart_request)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "visualization": expected_visualization,
+        "meta": {
+            "filters": {"condition": "Congenital Adrenal Hyperplasia"},
+            "source": "clinicaltrials.gov",
+            "units": "trials",
+            "grouping": expected_grouping,
+            "sorting": expected_sorting,
+        },
+    }
+    assert len(transport.urls) == 1
+    assert parse_qs(urlparse(transport.urls[0]).query) == {
+        "format": ["json"],
+        "pageSize": ["100"],
+        "query.cond": ["Congenital Adrenal Hyperplasia"],
+    }

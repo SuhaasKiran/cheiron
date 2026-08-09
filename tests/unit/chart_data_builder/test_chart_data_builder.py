@@ -115,10 +115,10 @@ def test_build_returns_empty_data_when_no_records_have_the_grouping_value() -> N
 
 
 def test_build_rejects_a_plan_with_an_unsupported_chart_and_grouping_pair() -> None:
-    plan = make_plan(ChartType.BAR_CHART, GroupBy.START_YEAR)
+    plan = make_plan(ChartType.TIME_SERIES, GroupBy.TRIAL_PHASE)
 
     with pytest.raises(
         ChartDataBuilderError,
-        match="bar_chart charts must group by trial_phase",
+        match="time_series requires group_by=start_year and series_by=null",
     ):
         ChartDataBuilder().build(plan, ())

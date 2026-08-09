@@ -24,6 +24,7 @@ class VisualizationSpec:
     title: str
     encoding: Mapping[str, str]
     data: tuple[Mapping[str, object], ...]
+    nodes: tuple[Mapping[str, object], ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.chart_type, ChartType):
@@ -38,6 +39,11 @@ class VisualizationSpec:
             self,
             "data",
             tuple(freeze_json_record(row, "data row") for row in self.data),
+        )
+        object.__setattr__(
+            self,
+            "nodes",
+            tuple(freeze_json_record(row, "node") for row in self.nodes),
         )
 
     @staticmethod
@@ -54,12 +60,15 @@ class VisualizationSpec:
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-ready chart specification."""
 
-        return {
+        result: dict[str, object] = {
             "type": self.chart_type.value,
             "title": self.title,
             "encoding": dict(self.encoding),
             "data": [dict(row) for row in self.data],
         }
+        if self.nodes:
+            result["nodes"] = [dict(node) for node in self.nodes]
+        return result
 
 
 @dataclass(frozen=True, slots=True)

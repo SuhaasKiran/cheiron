@@ -34,6 +34,57 @@ def test_load_settings_enables_llm_planning_when_openai_settings_are_complete() 
 
     assert settings.openai is not None
     assert settings.openai.model == "gpt-5.4-nano"
+    assert settings.openai.max_concurrent_requests == 4
+
+
+def test_load_settings_reads_the_llm_concurrency_limit() -> None:
+    settings = load_settings(
+        {
+            "OPENAI_API_KEY": "test-key",
+            "OPENAI_MODEL": "gpt-5.4-nano",
+            "CHEIRON_LLM_MAX_CONCURRENT_REQUESTS": "2",
+        }
+    )
+
+    assert settings.openai is not None
+    assert settings.openai.max_concurrent_requests == 2
+
+
+def test_load_settings_reads_the_llm_request_rate_limit() -> None:
+    settings = load_settings(
+        {
+            "OPENAI_API_KEY": "test-key",
+            "OPENAI_MODEL": "gpt-5.4-nano",
+            "CHEIRON_LLM_MAX_REQUESTS_PER_MINUTE": "30",
+        }
+    )
+
+    assert settings.openai is not None
+    assert settings.openai.max_requests_per_minute == 30
+
+
+@pytest.mark.parametrize("value", ("0", "33", "two"))
+def test_load_settings_rejects_an_invalid_llm_concurrency_limit(value: str) -> None:
+    with pytest.raises(SettingsError, match="CHEIRON_LLM_MAX_CONCURRENT_REQUESTS"):
+        load_settings(
+            {
+                "OPENAI_API_KEY": "test-key",
+                "OPENAI_MODEL": "gpt-5.4-nano",
+                "CHEIRON_LLM_MAX_CONCURRENT_REQUESTS": value,
+            }
+        )
+
+
+@pytest.mark.parametrize("value", ("0", "601", "many"))
+def test_load_settings_rejects_an_invalid_llm_request_rate_limit(value: str) -> None:
+    with pytest.raises(SettingsError, match="CHEIRON_LLM_MAX_REQUESTS_PER_MINUTE"):
+        load_settings(
+            {
+                "OPENAI_API_KEY": "test-key",
+                "OPENAI_MODEL": "gpt-5.4-nano",
+                "CHEIRON_LLM_MAX_REQUESTS_PER_MINUTE": value,
+            }
+        )
 
 
 def test_load_settings_rejects_partial_llm_configuration() -> None:

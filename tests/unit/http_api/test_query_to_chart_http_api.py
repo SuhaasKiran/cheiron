@@ -8,8 +8,16 @@ from dataclasses import dataclass, field
 from typing import cast
 
 import pytest
-from cheiron_core.chart_data_builder import ChartDataBuilderError
+from cheiron_core.chart_data_builder import (
+    ChartDataBuilderError,
+    ChartDataBuilderLimitError,
+)
 from cheiron_core.clinicaltrials import ClinicalTrialsRecordMappingError
+from cheiron_core.llm_query_planning import (
+    LlmPlanningCapacityError,
+    LlmPlanningRateLimitError,
+    LlmQueryPlannerError,
+)
 from cheiron_core.models import (
     ChartType,
     TrialFilters,
@@ -255,6 +263,26 @@ def test_endpoint_maps_known_flow_errors_to_safe_status_codes() -> None:
             500,
             "internal_error",
         ),
+        (
+            ChartDataBuilderLimitError("network_graph exceeds the maximum number"),
+            422,
+            "visualization_too_complex",
+        ),
+        (
+            LlmQueryPlannerError("query interpreter timed out"),
+            503,
+            "query_interpreter_unavailable",
+        ),
+        (
+            LlmPlanningCapacityError("query interpreter is at capacity"),
+            429,
+            "query_interpreter_capacity_exceeded",
+        ),
+        (
+            LlmPlanningRateLimitError(retry_after_seconds=3),
+            429,
+            "query_interpreter_rate_limited",
+        ),
     )
 
     for error, expected_status, expected_code in cases:
@@ -267,6 +295,23 @@ def test_endpoint_maps_known_flow_errors_to_safe_status_codes() -> None:
 
         assert status == expected_status
         assert error_code(response) == expected_code
+
+
+def test_llm_rate_limit_response_includes_a_retry_after_header() -> None:
+    from cheiron_core.http_api import create_http_api
+
+    status, headers, response = invoke(
+        TestClient(
+            create_http_api(
+                FakeQueryToChartFlow(LlmPlanningRateLimitError(retry_after_seconds=3))
+            ),
+            raise_server_exceptions=False,
+        )
+    )
+
+    assert status == 429
+    assert error_code(response) == "query_interpreter_rate_limited"
+    assert headers["retry-after"] == "3"
 
 
 def test_endpoint_enforces_response_body_size() -> None:
@@ -293,9 +338,16 @@ def test_default_app_uses_the_llm_planner_when_openai_is_configured(
     import cheiron_core.http_api as http_api
 
     class FakeDspyProgram:
-        def __init__(self, *, api_key: str, model: str) -> None:
+        def __init__(
+            self,
+            *,
+            api_key: str,
+            model: str,
+            chart_registry: object,
+        ) -> None:
             self.api_key = api_key
             self.model = model
+            self.chart_registry = chart_registry
 
         def run(self, *, question: str, explicit_filters_json: str) -> str:
             return """

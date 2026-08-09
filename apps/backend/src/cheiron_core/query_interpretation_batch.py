@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Protocol, TextIO
 
+from cheiron_core.chart_rendering import create_default_chart_renderer_registry
 from cheiron_core.clinicaltrials import (
     ClinicalTrialsApiClient,
     ClinicalTrialsApiError,
@@ -74,6 +75,7 @@ def _create_interpreter(settings: Settings) -> DspyClinicalTrialsQueryInterprete
     program = DspyClinicalTrialsQueryProgram(
         api_key=settings.openai.api_key,
         model=settings.openai.model,
+        chart_registry=create_default_chart_renderer_registry(),
     )
     traced_program = (
         TracedDspyQueryProgram(

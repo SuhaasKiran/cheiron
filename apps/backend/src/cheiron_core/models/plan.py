@@ -10,17 +10,26 @@ from cheiron_core.models.validation import ModelValidationError
 
 
 class ChartType(StrEnum):
-    """Chart types supported by the first deterministic query plans."""
+    """Visualization types that the renderer registry may enable."""
 
     BAR_CHART = "bar_chart"
+    GROUPED_BAR_CHART = "grouped_bar_chart"
     TIME_SERIES = "time_series"
+    SCATTER_PLOT = "scatter_plot"
+    HISTOGRAM = "histogram"
+    NETWORK_GRAPH = "network_graph"
 
 
 class GroupBy(StrEnum):
-    """Fields that the first deterministic plans can group by."""
+    """Normalized trial fields available to chart renderers."""
 
     START_YEAR = "start_year"
     TRIAL_PHASE = "trial_phase"
+    INTERVENTION = "intervention"
+    SPONSOR = "sponsor"
+    CONDITION = "condition"
+    INVESTIGATOR = "investigator"
+    SITE = "site"
 
 
 class Measure(StrEnum):
@@ -43,6 +52,7 @@ class QueryPlan:
     filters: TrialFilters
     chart_type: ChartType
     group_by: GroupBy
+    series_by: GroupBy | None = None
     measure: Measure = Measure.TRIAL_COUNT
     sort: SortOrder = SortOrder.ASCENDING
 
@@ -53,6 +63,10 @@ class QueryPlan:
             raise ModelValidationError("chart_type must be a supported ChartType.")
         if not isinstance(self.group_by, GroupBy):
             raise ModelValidationError("group_by must be a supported GroupBy value.")
+        if self.series_by is not None and not isinstance(self.series_by, GroupBy):
+            raise ModelValidationError(
+                "series_by must be a supported GroupBy value or None."
+            )
         if not isinstance(self.measure, Measure):
             raise ModelValidationError("measure must be a supported Measure value.")
         if not isinstance(self.sort, SortOrder):

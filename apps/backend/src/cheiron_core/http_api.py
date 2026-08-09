@@ -13,17 +13,27 @@ from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHttpException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from cheiron_core.chart_data_builder import ChartDataBuilder
+from cheiron_core.chart_data_builder import (
+    ChartDataBuilder,
+    ChartDataBuilderLimitError,
+)
+from cheiron_core.chart_rendering import (
+    ChartRendererRegistry,
+    create_default_chart_renderer_registry,
+)
 from cheiron_core.clinicaltrials import (
     ClinicalTrialsApiClient,
     ClinicalTrialsRecordMappingError,
 )
 from cheiron_core.llm_query_planning import (
+    BoundedLlmQueryPlanner,
     DspyClinicalTrialsQueryInterpreter,
     DspyClinicalTrialsQueryProgram,
-    FallbackQueryPlanner,
     LangSmithDspyQueryProgramTracer,
+    LlmPlanningCapacityError,
+    LlmPlanningRateLimitError,
     LlmQueryPlanner,
+    LlmQueryPlannerError,
     TracedDspyQueryProgram,
 )
 from cheiron_core.models import VisualizationResponse
@@ -218,6 +228,52 @@ def create_http_api(
             "ClinicalTrials.gov returned data that could not be used.",
         )
 
+    @app.exception_handler(LlmQueryPlannerError)
+    async def handle_llm_planner_error(
+        _: Request,
+        __: LlmQueryPlannerError,
+    ) -> JSONResponse:
+        return _error_response(
+            503,
+            "query_interpreter_unavailable",
+            "The query interpreter is temporarily unavailable.",
+        )
+
+    @app.exception_handler(LlmPlanningCapacityError)
+    async def handle_llm_planning_capacity_error(
+        _: Request,
+        __: LlmPlanningCapacityError,
+    ) -> JSONResponse:
+        return _error_response(
+            429,
+            "query_interpreter_capacity_exceeded",
+            "The query interpreter is busy. Please retry shortly.",
+            headers={"Retry-After": "1"},
+        )
+
+    @app.exception_handler(LlmPlanningRateLimitError)
+    async def handle_llm_planning_rate_limit_error(
+        _: Request,
+        error: LlmPlanningRateLimitError,
+    ) -> JSONResponse:
+        return _error_response(
+            429,
+            "query_interpreter_rate_limited",
+            "The query interpreter is busy. Please retry shortly.",
+            headers={"Retry-After": str(error.retry_after_seconds)},
+        )
+
+    @app.exception_handler(ChartDataBuilderLimitError)
+    async def handle_chart_limit_error(
+        _: Request,
+        __: ChartDataBuilderLimitError,
+    ) -> JSONResponse:
+        return _error_response(
+            422,
+            "visualization_too_complex",
+            "The requested visualization exceeds the server rendering limit.",
+        )
+
     @app.exception_handler(StarletteHttpException)
     async def handle_starlette_http_error(
         _: Request,
@@ -273,26 +329,32 @@ def create_default_http_api(settings: Settings | None = None) -> FastAPI:
 
     application_settings = load_settings() if settings is None else settings
     api_client = ClinicalTrialsApiClient()
+    chart_registry = create_default_chart_renderer_registry()
     flow = QueryToChartFlow(
         request_validator=RequestValidator(),
-        query_planner=_create_default_query_planner(application_settings),
+        query_planner=_create_default_query_planner(
+            application_settings,
+            chart_registry,
+        ),
         trial_retriever=TrialRetriever(api_client),
-        chart_data_builder=ChartDataBuilder(),
+        chart_data_builder=ChartDataBuilder(chart_registry),
     )
     return create_http_api(flow)
 
 
 def _create_default_query_planner(
     settings: Settings,
-) -> SimpleQueryPlanner | FallbackQueryPlanner:
+    chart_registry: ChartRendererRegistry,
+) -> SimpleQueryPlanner | BoundedLlmQueryPlanner:
     """Compose the LLM planner without changing the safe deterministic default."""
 
     if settings.openai is None:
-        return SimpleQueryPlanner()
+        return SimpleQueryPlanner(chart_registry)
 
     program = DspyClinicalTrialsQueryProgram(
         api_key=settings.openai.api_key,
         model=settings.openai.model,
+        chart_registry=chart_registry,
     )
     traced_program = (
         TracedDspyQueryProgram(
@@ -305,9 +367,13 @@ def _create_default_query_planner(
         if settings.langsmith.enabled
         else program
     )
-    return FallbackQueryPlanner(
-        primary=LlmQueryPlanner(DspyClinicalTrialsQueryInterpreter(traced_program)),
-        fallback=SimpleQueryPlanner(),
+    return BoundedLlmQueryPlanner(
+        LlmQueryPlanner(
+            DspyClinicalTrialsQueryInterpreter(traced_program),
+            chart_registry,
+        ),
+        max_concurrent_requests=settings.openai.max_concurrent_requests,
+        max_requests_per_minute=settings.openai.max_requests_per_minute,
     )
 
 

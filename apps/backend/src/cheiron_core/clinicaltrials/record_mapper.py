@@ -21,6 +21,7 @@ def map_trial_record(raw_study: object) -> TrialRecord:
     )
     status = _optional_mapping(protocol, "statusModule")
     design = _optional_mapping(protocol, "designModule")
+    conditions_module = _optional_mapping(protocol, "conditionsModule")
     interventions = _optional_mapping(protocol, "armsInterventionsModule")
     sponsors = _optional_mapping(protocol, "sponsorCollaboratorsModule")
     locations = _optional_mapping(protocol, "contactsLocationsModule")
@@ -28,8 +29,11 @@ def map_trial_record(raw_study: object) -> TrialRecord:
     nct_id = _require_text(identification.get("nctId"), "nctId")
     start_date = _start_date(status)
     phases = _text_values(design, "phases")
+    conditions = _text_values(conditions_module, "conditions")
     intervention_names = _intervention_names(interventions)
     sponsor = _lead_sponsor_name(sponsors)
+    investigators = _investigator_names(locations)
+    sites = _sites(locations)
     recruitment_status = _optional_text(
         status.get("overallStatus") if status is not None else None,
         "overallStatus",
@@ -49,11 +53,17 @@ def map_trial_record(raw_study: object) -> TrialRecord:
                 "nct_id": nct_id,
                 "start_date": start_date,
                 "phases": phases,
+                "conditions": conditions,
                 "interventions": intervention_names,
                 "sponsor": sponsor,
+                "investigators": investigators,
+                "sites": sites,
                 "recruitment_status": recruitment_status,
                 "countries": countries,
             },
+            conditions=conditions,
+            investigators=investigators,
+            sites=sites,
         )
     except ModelValidationError as error:
         raise ClinicalTrialsRecordMappingError(str(error)) from error
@@ -125,6 +135,52 @@ def _countries(locations_module: Mapping[str, object] | None) -> tuple[str, ...]
         if country is not None and country not in countries:
             countries.append(country)
     return tuple(countries)
+
+
+def _sites(locations_module: Mapping[str, object] | None) -> tuple[str, ...]:
+    """Extract distinct facility names while allowing location records without one."""
+
+    if locations_module is None:
+        return ()
+    raw_locations = locations_module.get("locations")
+    if raw_locations is None:
+        return ()
+    if not isinstance(raw_locations, list):
+        raise ClinicalTrialsRecordMappingError("locations must be a list.")
+
+    sites: list[str] = []
+    for index, location in enumerate(raw_locations):
+        location_record = _require_mapping(location, f"locations[{index}]")
+        facility = _optional_text(
+            location_record.get("facility"), f"locations[{index}].facility"
+        )
+        if facility is not None and facility not in sites:
+            sites.append(facility)
+    return tuple(sites)
+
+
+def _investigator_names(
+    locations_module: Mapping[str, object] | None,
+) -> tuple[str, ...]:
+    """Extract distinct overall-official names as the source's investigator field."""
+
+    if locations_module is None:
+        return ()
+    raw_officials = locations_module.get("overallOfficials")
+    if raw_officials is None:
+        return ()
+    if not isinstance(raw_officials, list):
+        raise ClinicalTrialsRecordMappingError("overallOfficials must be a list.")
+
+    investigators: list[str] = []
+    for index, official in enumerate(raw_officials):
+        official_record = _require_mapping(official, f"overallOfficials[{index}]")
+        name = _require_text(
+            official_record.get("name"), f"overallOfficials[{index}].name"
+        )
+        if name not in investigators:
+            investigators.append(name)
+    return tuple(investigators)
 
 
 def _text_values(

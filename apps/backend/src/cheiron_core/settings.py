@@ -12,6 +12,10 @@ from dotenv import load_dotenv
 
 _DEFAULT_ENVIRONMENT: Final = "development"
 _DEFAULT_LOG_LEVEL: Final = "INFO"
+_DEFAULT_LLM_MAX_CONCURRENT_REQUESTS: Final = 4
+_MAX_LLM_MAX_CONCURRENT_REQUESTS: Final = 32
+_DEFAULT_LLM_MAX_REQUESTS_PER_MINUTE: Final = 60
+_MAX_LLM_MAX_REQUESTS_PER_MINUTE: Final = 600
 _VALID_ENVIRONMENTS: Final = frozenset({"development", "test", "production"})
 _VALID_LOG_LEVELS: Final = frozenset({"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"})
 _TRUE_VALUES: Final = frozenset({"1", "true", "yes", "on"})
@@ -30,6 +34,8 @@ class OpenAiLlmSettings:
 
     api_key: str
     model: str
+    max_concurrent_requests: int = _DEFAULT_LLM_MAX_CONCURRENT_REQUESTS
+    max_requests_per_minute: int = _DEFAULT_LLM_MAX_REQUESTS_PER_MINUTE
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +89,12 @@ def load_settings(
         )
 
     openai = (
-        OpenAiLlmSettings(api_key=openai_api_key, model=openai_model)
+        OpenAiLlmSettings(
+            api_key=openai_api_key,
+            model=openai_model,
+            max_concurrent_requests=_load_llm_max_concurrent_requests(values),
+            max_requests_per_minute=_load_llm_max_requests_per_minute(values),
+        )
         if openai_api_key is not None and openai_model is not None
         else None
     )
@@ -107,6 +118,46 @@ def _optional_environment_value(
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def _load_llm_max_concurrent_requests(environment: Mapping[str, str]) -> int:
+    """Load a finite per-process LLM planning limit from configuration."""
+
+    raw_value = environment.get(
+        "CHEIRON_LLM_MAX_CONCURRENT_REQUESTS",
+        str(_DEFAULT_LLM_MAX_CONCURRENT_REQUESTS),
+    )
+    if not raw_value.isdecimal():
+        raise SettingsError(
+            "CHEIRON_LLM_MAX_CONCURRENT_REQUESTS must be a positive integer."
+        )
+    value = int(raw_value)
+    if not 1 <= value <= _MAX_LLM_MAX_CONCURRENT_REQUESTS:
+        raise SettingsError(
+            "CHEIRON_LLM_MAX_CONCURRENT_REQUESTS must be between 1 and "
+            f"{_MAX_LLM_MAX_CONCURRENT_REQUESTS}."
+        )
+    return value
+
+
+def _load_llm_max_requests_per_minute(environment: Mapping[str, str]) -> int:
+    """Load a finite per-process LLM request-rate limit from configuration."""
+
+    raw_value = environment.get(
+        "CHEIRON_LLM_MAX_REQUESTS_PER_MINUTE",
+        str(_DEFAULT_LLM_MAX_REQUESTS_PER_MINUTE),
+    )
+    if not raw_value.isdecimal():
+        raise SettingsError(
+            "CHEIRON_LLM_MAX_REQUESTS_PER_MINUTE must be a positive integer."
+        )
+    value = int(raw_value)
+    if not 1 <= value <= _MAX_LLM_MAX_REQUESTS_PER_MINUTE:
+        raise SettingsError(
+            "CHEIRON_LLM_MAX_REQUESTS_PER_MINUTE must be between 1 and "
+            f"{_MAX_LLM_MAX_REQUESTS_PER_MINUTE}."
+        )
+    return value
 
 
 def _load_langsmith_settings(

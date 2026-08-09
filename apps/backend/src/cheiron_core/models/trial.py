@@ -30,6 +30,9 @@ class TrialRecord:
     recruitment_status: str | None
     countries: tuple[str, ...]
     source_fields: Mapping[str, object]
+    conditions: tuple[str, ...] = ()
+    investigators: tuple[str, ...] = ()
+    sites: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         nct_id = require_text(self.nct_id, "nct_id")
@@ -58,6 +61,21 @@ class TrialRecord:
             self,
             "countries",
             self._normalize_text_tuple(self.countries, "countries"),
+        )
+        object.__setattr__(
+            self,
+            "conditions",
+            self._normalize_text_tuple(self.conditions, "conditions"),
+        )
+        object.__setattr__(
+            self,
+            "investigators",
+            self._normalize_text_tuple(self.investigators, "investigators"),
+        )
+        object.__setattr__(
+            self,
+            "sites",
+            self._normalize_text_tuple(self.sites, "sites"),
         )
         object.__setattr__(
             self,
