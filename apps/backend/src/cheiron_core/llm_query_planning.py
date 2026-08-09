@@ -80,11 +80,13 @@ unless the user explicitly asks to filter to a phase; NA is a real ClinicalTrial
 phase, not a placeholder for all phases. Set series_by to null unless the selected
 capability requires a second grouping field. The clinicaltrials_query object may contain
 only condition, intervention, trial_phase, start_year, and end_year; do not add
-placeholder objects such as additional_filters or other_filters. For a question outside
-ClinicalTrials.gov scope, return exactly one request with is_supported=false,
-visualization_needed=false, chart_type=null, group_by=null, series_by=null, an empty
-clinicaltrials_query object, and a short reason. Never return an empty requests list or
-include chart or query fields for an unsupported question."""
+placeholder objects such as additional_filters or other_filters. A request that only
+says trials by phase and year is ambiguous: do not invent a scatter plot or another
+relationship; return it as unsupported and ask for a supported relationship or chart
+type. For a question outside ClinicalTrials.gov scope, return exactly one request with
+is_supported=false, visualization_needed=false, chart_type=null, group_by=null,
+series_by=null, an empty clinicaltrials_query object, and a short reason. Never return
+an empty requests list or include chart or query fields for an unsupported question."""
 _CHART_SELECTION_GUIDANCE = """Choose the visualization from the analytical intent;
 the question does not need to name a chart. Use bar_chart for a count by one category,
 grouped_bar_chart for comparing counts across two categories, time_series for change or
@@ -99,6 +101,14 @@ entity, and network_graph for connections between two entity types. For example:
   group_by=sponsor, series_by=intervention.
 Use only the enabled visualization plans below and return their canonical field
 names."""
+_AMBIGUOUS_PHASE_YEAR_PATTERN = re.compile(
+    r"\b(?:trials?|studies)\s+by\s+(?:trial\s+)?phases?\s+and\s+"
+    r"(?:start\s+)?years?\b"
+)
+_AMBIGUOUS_YEAR_PHASE_PATTERN = re.compile(
+    r"\b(?:trials?|studies)\s+by\s+(?:start\s+)?years?\s+and\s+"
+    r"(?:trial\s+)?phases?\b"
+)
 
 
 def _move_alias_value(
@@ -868,6 +878,7 @@ class LlmQueryPlanner:
     ) -> QueryPlan:
         """Validate one model interpretation and convert it to a query plan."""
 
+        self._reject_ambiguous_phase_by_year_request(request)
         if not interpretation.is_supported:
             raise UnsupportedQueryError(
                 "This question is not supported by ClinicalTrials.gov: "
@@ -905,6 +916,19 @@ class LlmQueryPlanner:
                 "This visualization is not supported by the configured chart "
                 f"capabilities: {error}"
             ) from error
+
+    @staticmethod
+    def _reject_ambiguous_phase_by_year_request(request: TrialQueryRequest) -> None:
+        """Reject an underspecified two-dimensional request before chart planning."""
+
+        question = " ".join(request.query.casefold().split())
+        if _AMBIGUOUS_PHASE_YEAR_PATTERN.search(
+            question
+        ) or _AMBIGUOUS_YEAR_PHASE_PATTERN.search(question):
+            raise UnsupportedQueryError(
+                "This question asks for an ambiguous phase-by-year comparison. "
+                "Specify a supported relationship or chart type."
+            )
 
     @staticmethod
     def _validate_inferred_filters_are_grounded(

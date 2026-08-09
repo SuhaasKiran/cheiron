@@ -6,9 +6,9 @@ import pytest
 from cheiron_core.chart_data_builder import (
     ChartDataBuilder,
     ChartDataBuilderError,
-    ChartDataBuilderLimitError,
 )
 from cheiron_core.chart_rendering import (
+    MAX_NETWORK_EDGES,
     ChartRendererRegistry,
     HistogramRenderer,
     TimeSeriesRenderer,
@@ -187,22 +187,106 @@ def test_default_registry_builds_a_network_of_trial_entities() -> None:
     )
 
 
-def test_network_graph_rejects_excessive_entity_values_before_expanding_edges() -> None:
-    with pytest.raises(ChartDataBuilderLimitError, match="maximum values"):
-        ChartDataBuilder().build(
-            make_plan(
-                ChartType.NETWORK_GRAPH,
-                GroupBy.CONDITION,
-                series_by=GroupBy.SITE,
+def test_network_graph_caps_excessive_entity_values_per_source_record() -> None:
+    response = ChartDataBuilder().build(
+        make_plan(
+            ChartType.NETWORK_GRAPH,
+            GroupBy.CONDITION,
+            series_by=GroupBy.SITE,
+        ),
+        (
+            make_record(
+                "NCT00000001",
+                conditions=tuple(f"Condition {index}" for index in range(21)),
+                sites=("Site A",),
             ),
-            (
-                make_record(
-                    "NCT00000001",
-                    conditions=tuple(f"Condition {index}" for index in range(21)),
-                    sites=("Site A",),
-                ),
+        ),
+    )
+
+    assert len(response.visualization.data) == 20
+    assert response.meta.truncated is True
+
+
+def test_network_graph_omits_an_overlong_entity_label_from_one_record() -> None:
+    response = ChartDataBuilder().build(
+        make_plan(
+            ChartType.NETWORK_GRAPH,
+            GroupBy.CONDITION,
+            series_by=GroupBy.SITE,
+        ),
+        (
+            make_record(
+                "NCT00000001",
+                conditions=("Asthma", "x" * 501),
+                sites=("Site A",),
             ),
+        ),
+    )
+
+    assert response.visualization.data == (
+        {
+            "source": "condition:Asthma",
+            "target": "site:Site A",
+            "trial_count": 1,
+        },
+    )
+    assert response.meta.truncated is True
+
+
+def test_network_graph_keeps_the_strongest_edges_within_its_rendering_limit() -> None:
+    records = tuple(
+        make_record(
+            f"NCT{index:08d}",
+            conditions=(f"Condition {index // 45}",),
+            sites=(f"Site {index % 45}",),
         )
+        for index in range(MAX_NETWORK_EDGES + 1)
+    )
+
+    response = ChartDataBuilder().build(
+        make_plan(
+            ChartType.NETWORK_GRAPH,
+            GroupBy.CONDITION,
+            series_by=GroupBy.SITE,
+        ),
+        records,
+    )
+
+    assert len(response.visualization.data) == MAX_NETWORK_EDGES
+    assert len(response.visualization.nodes) == 90
+    assert response.meta.truncated is True
+    assert response.to_dict()["meta"] == {
+        "filters": {"condition": "asthma"},
+        "source": "clinicaltrials.gov",
+        "units": "trials",
+        "grouping": "condition,site",
+        "sorting": "source_ascending,target_ascending",
+        "truncated": True,
+    }
+
+
+def test_network_graph_keeps_a_bounded_subgraph_when_node_limit_is_reached() -> None:
+    records = tuple(
+        make_record(
+            f"NCT{index:08d}",
+            conditions=(f"Condition {index}",),
+            sites=(f"Site {index}",),
+        )
+        for index in range(501)
+    )
+
+    response = ChartDataBuilder().build(
+        make_plan(
+            ChartType.NETWORK_GRAPH,
+            GroupBy.CONDITION,
+            series_by=GroupBy.SITE,
+        ),
+        records,
+    )
+
+    assert len(response.visualization.data) == 500
+    assert len(response.visualization.nodes) == 1_000
+    assert response.meta.truncated is True
 
 
 def test_registry_can_disable_chart_types_without_changing_the_builder() -> None:

@@ -37,6 +37,46 @@ def test_load_settings_reads_supported_environment_overrides() -> None:
     assert settings.log_level == "WARNING"
 
 
+def test_load_settings_reads_public_http_security_configuration() -> None:
+    settings = load_settings(
+        {
+            "CHEIRON_CORS_ALLOWED_ORIGINS": (
+                "https://app.example.test,http://localhost:3000"
+            ),
+            "CHEIRON_API_KEYS": "test-api-key,other-test-api-key",
+            "CHEIRON_HTTP_RATE_LIMIT_REQUESTS": "20",
+            "CHEIRON_HTTP_RATE_LIMIT_WINDOW_SECONDS": "120",
+        }
+    )
+
+    assert settings.http_security.cors_allowed_origins == (
+        "https://app.example.test",
+        "http://localhost:3000",
+    )
+    assert settings.http_security.api_keys == {
+        "test-api-key",
+        "other-test-api-key",
+    }
+    assert settings.http_security.rate_limit_requests == 20
+    assert settings.http_security.rate_limit_window_seconds == 120
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("CHEIRON_CORS_ALLOWED_ORIGINS", "https://app.example.test/path"),
+        ("CHEIRON_HTTP_RATE_LIMIT_REQUESTS", "0"),
+        ("CHEIRON_HTTP_RATE_LIMIT_WINDOW_SECONDS", "many"),
+    ],
+)
+def test_load_settings_rejects_invalid_public_http_security_configuration(
+    name: str,
+    value: str,
+) -> None:
+    with pytest.raises(SettingsError, match=name):
+        load_settings({name: value})
+
+
 def test_load_settings_enables_llm_planning_when_openai_settings_are_complete() -> None:
     settings = load_settings(
         {

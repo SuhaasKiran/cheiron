@@ -81,6 +81,7 @@ class VisualizationMeta:
     time_granularity: str | None = None
     grouping: str | None = None
     sorting: str | None = None
+    truncated: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.filters, TrialFilters):
@@ -94,6 +95,8 @@ class VisualizationMeta:
         )
         object.__setattr__(self, "grouping", optional_text(self.grouping, "grouping"))
         object.__setattr__(self, "sorting", optional_text(self.sorting, "sorting"))
+        if type(self.truncated) is not bool:
+            raise ModelValidationError("truncated must be a boolean.")
 
     def to_dict(self) -> dict[str, object]:
         """Return JSON-ready metadata without empty optional fields."""
@@ -106,6 +109,8 @@ class VisualizationMeta:
             value = getattr(self, field_name)
             if value is not None:
                 result[field_name] = value
+        if self.truncated:
+            result["truncated"] = True
         return result
 
 

@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -18,6 +19,10 @@ _DEFAULT_LLM_MAX_REQUESTS_PER_MINUTE: Final = 60
 _MAX_LLM_MAX_REQUESTS_PER_MINUTE: Final = 600
 _DEFAULT_RETRIEVAL_MAX_STUDIES: Final = 1_000
 _MAX_RETRIEVAL_MAX_STUDIES: Final = 10_000
+_DEFAULT_HTTP_RATE_LIMIT_REQUESTS: Final = 30
+_MAX_HTTP_RATE_LIMIT_REQUESTS: Final = 600
+_DEFAULT_HTTP_RATE_LIMIT_WINDOW_SECONDS: Final = 60
+_MAX_HTTP_RATE_LIMIT_WINDOW_SECONDS: Final = 3_600
 _VALID_ENVIRONMENTS: Final = frozenset({"development", "test", "production"})
 _VALID_LOG_LEVELS: Final = frozenset({"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"})
 _TRUE_VALUES: Final = frozenset({"1", "true", "yes", "on"})
@@ -51,6 +56,16 @@ class LangSmithTracingSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class HttpSecuritySettings:
+    """CORS, optional API-key, and per-process public-request protections."""
+
+    cors_allowed_origins: tuple[str, ...] = ()
+    api_keys: frozenset[str] = frozenset()
+    rate_limit_requests: int = _DEFAULT_HTTP_RATE_LIMIT_REQUESTS
+    rate_limit_window_seconds: int = _DEFAULT_HTTP_RATE_LIMIT_WINDOW_SECONDS
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     """The settings needed by the application foundation and optional LLM path."""
 
@@ -59,6 +74,7 @@ class Settings:
     retrieval_max_studies: int = _DEFAULT_RETRIEVAL_MAX_STUDIES
     openai: OpenAiLlmSettings | None = None
     langsmith: LangSmithTracingSettings = LangSmithTracingSettings(enabled=False)
+    http_security: HttpSecuritySettings = HttpSecuritySettings()
 
 
 def load_settings(
@@ -108,6 +124,7 @@ def load_settings(
         retrieval_max_studies=_load_retrieval_max_studies(values),
         openai=openai,
         langsmith=langsmith,
+        http_security=_load_http_security_settings(values),
     )
 
 
@@ -199,6 +216,79 @@ def _load_langsmith_settings(
         endpoint=_optional_environment_value(environment, "LANGSMITH_ENDPOINT"),
         project=_optional_environment_value(environment, "LANGSMITH_PROJECT"),
     )
+
+
+def _load_http_security_settings(
+    environment: Mapping[str, str],
+) -> HttpSecuritySettings:
+    """Load public HTTP protections without exposing credential values."""
+
+    return HttpSecuritySettings(
+        cors_allowed_origins=_load_cors_allowed_origins(environment),
+        api_keys=frozenset(_load_secret_list(environment, "CHEIRON_API_KEYS")),
+        rate_limit_requests=_load_bounded_positive_integer(
+            environment,
+            "CHEIRON_HTTP_RATE_LIMIT_REQUESTS",
+            _DEFAULT_HTTP_RATE_LIMIT_REQUESTS,
+            _MAX_HTTP_RATE_LIMIT_REQUESTS,
+        ),
+        rate_limit_window_seconds=_load_bounded_positive_integer(
+            environment,
+            "CHEIRON_HTTP_RATE_LIMIT_WINDOW_SECONDS",
+            _DEFAULT_HTTP_RATE_LIMIT_WINDOW_SECONDS,
+            _MAX_HTTP_RATE_LIMIT_WINDOW_SECONDS,
+        ),
+    )
+
+
+def _load_cors_allowed_origins(environment: Mapping[str, str]) -> tuple[str, ...]:
+    """Load explicit browser origins; wildcard origins are never accepted."""
+
+    origins = _load_secret_list(environment, "CHEIRON_CORS_ALLOWED_ORIGINS")
+    for origin in origins:
+        parsed = urlparse(origin)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.path not in {"", "/"}
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise SettingsError(
+                "CHEIRON_CORS_ALLOWED_ORIGINS must contain comma-separated "
+                "http or https origins without paths."
+            )
+    return tuple(dict.fromkeys(origins))
+
+
+def _load_secret_list(environment: Mapping[str, str], name: str) -> tuple[str, ...]:
+    """Split a comma-separated setting without including empty values."""
+
+    raw_value = environment.get(name, "")
+    if not isinstance(raw_value, str):
+        raise SettingsError(f"{name} must be a comma-separated string.")
+    values = tuple(value.strip() for value in raw_value.split(",") if value.strip())
+    if raw_value.strip() and not values:
+        raise SettingsError(f"{name} must contain at least one non-empty value.")
+    return values
+
+
+def _load_bounded_positive_integer(
+    environment: Mapping[str, str],
+    name: str,
+    default: int,
+    maximum: int,
+) -> int:
+    """Load one bounded integer limit with a stable configuration error."""
+
+    raw_value = environment.get(name, str(default))
+    if not raw_value.isdecimal():
+        raise SettingsError(f"{name} must be a positive integer.")
+    value = int(raw_value)
+    if not 1 <= value <= maximum:
+        raise SettingsError(f"{name} must be between 1 and {maximum}.")
+    return value
 
 
 def _parse_boolean(value: object) -> bool:

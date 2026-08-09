@@ -407,30 +407,24 @@ class NetworkGraphRenderer:
         if plan.series_by is None:
             raise AssertionError("validated network plans require series_by.")
         edge_counts: Counter[tuple[str, str]] = Counter()
-        nodes: dict[str, dict[str, str]] = {}
+        truncated = False
         for record in records:
-            sources = _bounded_entity_values(record, plan.group_by)
-            targets = _bounded_entity_values(record, plan.series_by)
+            sources, sources_truncated = _bounded_network_entity_values(
+                record,
+                plan.group_by,
+            )
+            targets, targets_truncated = _bounded_network_entity_values(
+                record,
+                plan.series_by,
+            )
+            truncated = truncated or sources_truncated or targets_truncated
             for source in sources:
                 source_id = _node_id(plan.group_by, source)
-                _add_node(nodes, source_id, plan.group_by, source)
                 for target in targets:
                     target_id = _node_id(plan.series_by, target)
-                    _add_node(nodes, target_id, plan.series_by, target)
-                    edge = (source_id, target_id)
-                    if (
-                        edge not in edge_counts
-                        and len(edge_counts) >= MAX_NETWORK_EDGES
-                    ):
-                        raise ChartRenderLimitError(
-                            "network_graph exceeds the maximum number of edges."
-                        )
-                    edge_counts[edge] += 1
+                    edge_counts[(source_id, target_id)] += 1
 
-        edges = tuple(
-            {"source": source, "target": target, "trial_count": count}
-            for (source, target), count in sorted(edge_counts.items())
-        )
+        edges, nodes, graph_truncated = _bounded_network_graph(edge_counts)
         return VisualizationResponse(
             visualization=VisualizationSpec(
                 chart_type=self.chart_type,
@@ -445,9 +439,13 @@ class NetworkGraphRenderer:
                     "weight": "trial_count",
                 },
                 data=edges,
-                nodes=tuple(nodes[node_id] for node_id in sorted(nodes)),
+                nodes=nodes,
             ),
-            meta=_trial_count_meta(plan, sorting="source_ascending,target_ascending"),
+            meta=_trial_count_meta(
+                plan,
+                sorting="source_ascending,target_ascending",
+                truncated=truncated or graph_truncated,
+            ),
         )
 
     def default_sort(self) -> SortOrder:
@@ -620,6 +618,7 @@ def _trial_count_meta(
     *,
     sorting: str,
     time_granularity: str | None = None,
+    truncated: bool = False,
 ) -> VisualizationMeta:
     grouping = plan.group_by.value
     if plan.series_by is not None:
@@ -630,6 +629,7 @@ def _trial_count_meta(
         time_granularity=time_granularity,
         grouping=grouping,
         sorting=sorting,
+        truncated=truncated,
     )
 
 
@@ -652,19 +652,68 @@ def _bounded_entity_values(
     return values
 
 
-def _add_node(
-    nodes: dict[str, dict[str, str]],
-    node_id: str,
+def _bounded_network_entity_values(
+    record: TrialRecord,
     group_by: GroupBy,
-    value: str | int,
-) -> None:
-    """Add one bounded graph node without allowing unbounded growth."""
+) -> tuple[tuple[str | int, ...], bool]:
+    """Keep a safe deterministic subset of one record's graph entities.
 
-    if node_id not in nodes and len(nodes) >= MAX_NETWORK_NODES:
-        raise ChartRenderLimitError(
-            "network_graph exceeds the maximum number of nodes."
-        )
-    nodes[node_id] = _node(group_by, value)
+    A high-cardinality or overlong source field is valid ClinicalTrials.gov data, not
+    a reason to discard the entire chart. Network graphs retain a bounded subset and
+    expose that loss of detail through their response metadata.
+    """
+
+    values = _values_for(record, group_by)
+    valid_values = sorted(
+        (value for value in values if len(str(value)) <= MAX_ENTITY_LABEL_CHARACTERS),
+        key=_text_sort_key,
+    )
+    bounded_values = tuple(valid_values[:MAX_ENTITY_VALUES_PER_RECORD])
+    return bounded_values, len(bounded_values) < len(values)
+
+
+def _bounded_network_graph(
+    edge_counts: Counter[tuple[str, str]],
+) -> tuple[tuple[dict[str, object], ...], tuple[dict[str, str], ...], bool]:
+    """Select a deterministic, bounded graph without returning an unsafe payload.
+
+    Higher-count edges are retained first. Ties use the source and target IDs, so the
+    same source records always produce the same bounded graph.
+    """
+
+    selected_edges: list[tuple[str, str, int]] = []
+    selected_node_ids: set[str] = set()
+    truncated = False
+    ranked_edges = sorted(
+        edge_counts.items(),
+        key=lambda item: (-item[1], item[0][0], item[0][1]),
+    )
+    for (source, target), count in ranked_edges:
+        if len(selected_edges) >= MAX_NETWORK_EDGES:
+            truncated = True
+            break
+        new_node_ids = {source, target}.difference(selected_node_ids)
+        if len(selected_node_ids) + len(new_node_ids) > MAX_NETWORK_NODES:
+            truncated = True
+            continue
+        selected_edges.append((source, target, count))
+        selected_node_ids.update(new_node_ids)
+
+    edges = tuple(
+        {"source": source, "target": target, "trial_count": count}
+        for source, target, count in sorted(selected_edges)
+    )
+    nodes = tuple(_node_from_id(node_id) for node_id in sorted(selected_node_ids))
+    return edges, nodes, truncated
+
+
+def _node_from_id(node_id: str) -> dict[str, str]:
+    """Rebuild one selected node from its stable, renderer-owned identifier."""
+
+    group_by_value, separator, value = node_id.partition(":")
+    if not separator:
+        raise AssertionError("network node IDs must contain a group separator.")
+    return _node(GroupBy(group_by_value), value)
 
 
 def _node_id(group_by: GroupBy, value: str | int) -> str:

@@ -9,6 +9,7 @@ from typing import Protocol
 
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHttpException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -24,6 +25,10 @@ from cheiron_core.chart_rendering import (
 from cheiron_core.clinicaltrials import (
     ClinicalTrialsApiClient,
     ClinicalTrialsRecordMappingError,
+)
+from cheiron_core.http_security import (
+    ApiKeyAuthenticator,
+    ClientRequestRateLimiter,
 )
 from cheiron_core.llm_query_planning import (
     BoundedLlmQueryPlanner,
@@ -44,7 +49,7 @@ from cheiron_core.query_to_chart import (
     TrialResultLimitExceededError,
 )
 from cheiron_core.request_validation import RequestValidationError, RequestValidator
-from cheiron_core.settings import Settings, load_settings
+from cheiron_core.settings import HttpSecuritySettings, Settings, load_settings
 from cheiron_core.trial_retrieval import (
     TrialRetrievalDependencyError,
     TrialRetrievalQueryError,
@@ -53,6 +58,7 @@ from cheiron_core.trial_retrieval import (
 )
 
 CHARTS_PATH = "/api/v1/charts"
+HEALTH_PATH = "/health"
 DEFAULT_MAX_REQUEST_BYTES = 8_192
 DEFAULT_MAX_RESPONSE_BYTES = 1_048_576
 
@@ -72,15 +78,78 @@ class QueryToChartExecutor(Protocol):
 class HttpApiError(Exception):
     """A safe, stable HTTP error raised by the FastAPI adapter."""
 
-    def __init__(self, status_code: int, code: str, message: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+    ) -> None:
         self.status_code = status_code
         self.code = code
         self.message = message
+        self.headers = dict(headers or {})
         super().__init__(message)
 
 
 class _RequestBodyTooLargeError(Exception):
     """Stop an ASGI request before its body is fully buffered."""
+
+
+class PublicApiSecurityMiddleware:
+    """Apply optional API-key authentication and rate limits to chart requests."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        authenticator: ApiKeyAuthenticator,
+        rate_limiter: ClientRequestRateLimiter,
+    ) -> None:
+        self._app = app
+        self._authenticator = authenticator
+        self._rate_limiter = rate_limiter
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if not self._requires_protection(scope):
+            await self._app(scope, receive, send)
+            return
+
+        api_key = _header_value(scope, b"x-api-key")
+        if not self._authenticator.is_authorized(api_key):
+            await _send_error_response(
+                send,
+                HttpApiError(
+                    401,
+                    "authentication_required",
+                    "A valid X-API-Key is required.",
+                    headers={"WWW-Authenticate": "ApiKey"},
+                ),
+            )
+            return
+
+        decision = self._rate_limiter.check(_client_identifier(scope))
+        if not decision.allowed:
+            await _send_error_response(
+                send,
+                HttpApiError(
+                    429,
+                    "rate_limited",
+                    "Too many chart requests. Please retry shortly.",
+                    headers={"Retry-After": str(decision.retry_after_seconds)},
+                ),
+            )
+            return
+        await self._app(scope, receive, send)
+
+    @staticmethod
+    def _requires_protection(scope: Scope) -> bool:
+        return (
+            scope["type"] == "http"
+            and scope.get("path") == CHARTS_PATH
+            and scope.get("method") == "POST"
+        )
 
 
 class RequestBodyLimitMiddleware:
@@ -171,21 +240,51 @@ def create_http_api(
     *,
     max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES,
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+    security: HttpSecuritySettings | None = None,
+    rate_limiter: ClientRequestRateLimiter | None = None,
 ) -> FastAPI:
     """Create the injected FastAPI app for the chart endpoint."""
 
     max_request_bytes = _validate_limit(max_request_bytes, "max_request_bytes")
     max_response_bytes = _validate_limit(max_response_bytes, "max_response_bytes")
+    resolved_security = HttpSecuritySettings() if security is None else security
+    if not isinstance(resolved_security, HttpSecuritySettings):
+        raise ValueError("security must be an HttpSecuritySettings instance.")
+    public_rate_limiter = rate_limiter or ClientRequestRateLimiter(
+        max_requests=resolved_security.rate_limit_requests,
+        window_seconds=resolved_security.rate_limit_window_seconds,
+    )
 
     app = FastAPI(title="Cheiron API", version="0.1.0")
+    app.add_middleware(
+        PublicApiSecurityMiddleware,
+        authenticator=ApiKeyAuthenticator(resolved_security.api_keys),
+        rate_limiter=public_rate_limiter,
+    )
     app.add_middleware(
         RequestBodyLimitMiddleware,
         max_request_bytes=max_request_bytes,
     )
+    if resolved_security.cors_allowed_origins:
+        # Starlette applies the most recently added middleware first. CORS must
+        # wrap security and body-limit errors so browser clients can read them.
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(resolved_security.cors_allowed_origins),
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Content-Type", "X-API-Key"],
+            max_age=600,
+        )
 
     @app.exception_handler(HttpApiError)
     async def handle_http_api_error(_: Request, error: HttpApiError) -> JSONResponse:
-        return _error_response(error.status_code, error.code, error.message)
+        return _error_response(
+            error.status_code,
+            error.code,
+            error.message,
+            headers=error.headers,
+        )
 
     @app.exception_handler(RequestValidationError)
     async def handle_request_validation_error(
@@ -350,6 +449,15 @@ def create_http_api(
             "The server could not build a chart response.",
         )
 
+    @app.get(HEALTH_PATH, include_in_schema=False)
+    async def health_check() -> JSONResponse:
+        """Return a dependency-free liveness response for Railway."""
+
+        return JSONResponse(
+            content={"status": "ok"},
+            headers={"Cache-Control": "no-store"},
+        )
+
     @app.post(CHARTS_PATH)
     async def create_chart(request: Request) -> Response:
         """Parse one JSON request and return the flow's visualization response."""
@@ -393,7 +501,7 @@ def create_default_http_api(settings: Settings | None = None) -> FastAPI:
         ),
         chart_data_builder=ChartDataBuilder(chart_registry),
     )
-    return create_http_api(flow)
+    return create_http_api(flow, security=application_settings.http_security)
 
 
 def _create_default_query_planner(
@@ -493,6 +601,33 @@ def _error_response(
     )
 
 
+def _header_value(scope: Scope, name: bytes) -> str | None:
+    """Read one ASCII request header without depending on a framework request."""
+
+    for header in scope.get("headers", []):
+        if (
+            not isinstance(header, tuple)
+            or len(header) != 2
+            or header[0] != name
+            or not isinstance(header[1], bytes)
+        ):
+            continue
+        try:
+            return header[1].decode("ascii")
+        except UnicodeDecodeError:
+            return None
+    return None
+
+
+def _client_identifier(scope: Scope) -> str:
+    """Return the ASGI client's host without trusting caller-supplied headers."""
+
+    client = scope.get("client")
+    if isinstance(client, tuple) and client and isinstance(client[0], str):
+        return client[0]
+    return "unknown"
+
+
 async def _send_error_response(send: Send, error: HttpApiError) -> None:
     body = _encode_json({"error": {"code": error.code, "message": error.message}})
     await send(
@@ -503,6 +638,10 @@ async def _send_error_response(send: Send, error: HttpApiError) -> None:
                 (b"content-type", b"application/json"),
                 (b"content-length", str(len(body)).encode("ascii")),
                 (b"cache-control", b"no-store"),
+                *[
+                    (name.lower().encode("ascii"), value.encode("ascii"))
+                    for name, value in error.headers.items()
+                ],
             ],
         }
     )

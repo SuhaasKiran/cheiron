@@ -211,6 +211,24 @@ def test_llm_planner_creates_an_extended_chart_plan() -> None:
     assert plan.series_by is GroupBy.SPONSOR
 
 
+def test_llm_planner_rejects_an_ambiguous_phase_and_year_interpretation() -> None:
+    planner = LlmQueryPlanner(
+        FakeInterpreter(
+            ClinicalTrialsQueryInterpretation(
+                is_supported=True,
+                visualization_needed=True,
+                chart_type=ChartType.SCATTER_PLOT,
+                group_by=GroupBy.START_YEAR,
+                series_by=GroupBy.TRIAL_PHASE,
+                reason="The question includes phase and year.",
+            )
+        )
+    )
+
+    with pytest.raises(UnsupportedQueryError, match="ambiguous phase-by-year"):
+        planner.plan(TrialQueryRequest(query="Show trials by phase and year."))
+
+
 def test_llm_planner_creates_ordered_plans_for_independent_requests() -> None:
     planner = LlmQueryPlanner(
         FakeInterpreter(
