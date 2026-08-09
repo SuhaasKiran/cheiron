@@ -58,12 +58,14 @@ For every commit, add an entry at the top of `docs/commit-log.md` using this for
 ```markdown
 ## YYYY-MM-DD — CATEGORY: short imperative summary
 
-- **Changed:** Simple description of the files or behavior changed.
-- **Why:** Simple reason this change is needed.
+- **Changed:** Describe what changed in simple, easy-to-understand language. Be descriptive enough that a reader can understand the behavior or files affected without opening the code.
+- **Why:** Explain in simple, easy-to-understand language why the change is needed and what problem, requirement, or benefit it addresses.
 - **Validated:** Tests and checks run, or a clear statement of what could not be run and why.
 ```
 
 The log entry is intentionally included in the same commit as the work it describes. The commit hash is available directly in Git history, so it does not need to be written into the file before the commit exists.
+
+Use plain language and short sentences, but include enough practical detail to make the entry useful to someone reviewing the project later. Avoid unexplained abbreviations, implementation-only jargon, and vague wording such as "updated logic" or "improved code".
 
 ## Safeguards
 

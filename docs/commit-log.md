@@ -2,6 +2,12 @@
 
 This log records each project commit in simple language. Each entry is added by the `/commit` command and is included in the same commit it describes.
 
+## 2026-08-08 — FEAT: add request validation and query planning
+
+- **Changed:** Added a request validator that checks incoming question data, accepts only the supported filters, limits request size, and returns a clean request model. Added a simple planner that turns questions about trials by year or by phase into chart plans, with tests and clear documentation. Removed empty placeholder folders that are no longer needed, and clarified that future commit-log entries must describe changes and reasons in plain language.
+- **Why:** The backend now has safe, testable steps for checking a request and deciding the first supported chart. This keeps later API and chart work separate from untrusted input and makes project history easier to understand.
+- **Validated:** Ran targeted validator and planner tests (12 passed), Ruff lint and format checks, mypy (17 source files), the full pytest suite (40 passed), `python -m compileall -q apps/backend/src`, `python -m pip check`, and `git diff --check`.
+
 ## 2026-08-08 — FEAT: add ClinicalTrials API client foundation
 
 - **Changed:** Moved backend code into `apps/backend/`, added a bounded ClinicalTrials.gov API client with local fake-transport tests, configured Ruff and mypy, and clarified backend folder and development-command rules.
