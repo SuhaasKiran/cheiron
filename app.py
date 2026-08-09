@@ -16,7 +16,11 @@ try:
     app = create_default_http_api()
     logger.info("cheiron_core.http_api: app created successfully")
 except Exception:
-    print("ERROR: Failed to create app via create_default_http_api()", file=sys.stderr, flush=True)
+    print(
+        "ERROR: Failed to create app via create_default_http_api()",
+        file=sys.stderr,
+        flush=True,
+    )
     traceback.print_exc(file=sys.stderr)
     sys.stderr.flush()
     logger.exception("Failed to create app via create_default_http_api()")
