@@ -1,0 +1,4 @@
+{"query":"Show the number of melanoma studies started each year since 2023."}
+{"query":"Compare studies by phase for pembrolizumab in lung cancer.","filters":{"condition":"Non-small cell lung cancer","start_year":2024}}
+{"query":"Show the phase distribution of all registered clinical trials."}
+{"query":"What will the weather be in Boston tomorrow?"}

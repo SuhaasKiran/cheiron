@@ -18,6 +18,14 @@ from cheiron_core.clinicaltrials import (
     ClinicalTrialsApiClient,
     ClinicalTrialsRecordMappingError,
 )
+from cheiron_core.llm_query_planning import (
+    DspyClinicalTrialsQueryInterpreter,
+    DspyClinicalTrialsQueryProgram,
+    FallbackQueryPlanner,
+    LangSmithDspyQueryProgramTracer,
+    LlmQueryPlanner,
+    TracedDspyQueryProgram,
+)
 from cheiron_core.models import VisualizationResponse
 from cheiron_core.query_planning import SimpleQueryPlanner, UnsupportedQueryError
 from cheiron_core.query_to_chart import (
@@ -25,6 +33,7 @@ from cheiron_core.query_to_chart import (
     QueryToChartFlow,
 )
 from cheiron_core.request_validation import RequestValidationError, RequestValidator
+from cheiron_core.settings import Settings, load_settings
 from cheiron_core.trial_retrieval import TrialRetrievalDependencyError, TrialRetriever
 
 CHARTS_PATH = "/api/v1/charts"
@@ -259,17 +268,47 @@ def create_http_api(
     return app
 
 
-def create_default_http_api() -> FastAPI:
-    """Create the first production FastAPI composition for Uvicorn."""
+def create_default_http_api(settings: Settings | None = None) -> FastAPI:
+    """Create the production composition, enabling LLM planning when configured."""
 
+    application_settings = load_settings() if settings is None else settings
     api_client = ClinicalTrialsApiClient()
     flow = QueryToChartFlow(
         request_validator=RequestValidator(),
-        query_planner=SimpleQueryPlanner(),
+        query_planner=_create_default_query_planner(application_settings),
         trial_retriever=TrialRetriever(api_client),
         chart_data_builder=ChartDataBuilder(),
     )
     return create_http_api(flow)
+
+
+def _create_default_query_planner(
+    settings: Settings,
+) -> SimpleQueryPlanner | FallbackQueryPlanner:
+    """Compose the LLM planner without changing the safe deterministic default."""
+
+    if settings.openai is None:
+        return SimpleQueryPlanner()
+
+    program = DspyClinicalTrialsQueryProgram(
+        api_key=settings.openai.api_key,
+        model=settings.openai.model,
+    )
+    traced_program = (
+        TracedDspyQueryProgram(
+            program,
+            LangSmithDspyQueryProgramTracer(
+                settings=settings.langsmith,
+                model=settings.openai.model,
+            ),
+        )
+        if settings.langsmith.enabled
+        else program
+    )
+    return FallbackQueryPlanner(
+        primary=LlmQueryPlanner(DspyClinicalTrialsQueryInterpreter(traced_program)),
+        fallback=SimpleQueryPlanner(),
+    )
 
 
 def _validate_content_type(content_type: str | None) -> None:

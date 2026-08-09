@@ -1,6 +1,10 @@
 fastapi==0.139.2
+dspy==3.2.1
 httpx2==2.9.1
+langsmith==0.10.7
 pytest==8.4.2
 mypy==2.3.0
+pydantic==2.13.4
+python-dotenv==1.2.2
 ruff==0.16.2
 uvicorn==0.51.0

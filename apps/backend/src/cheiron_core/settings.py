@@ -5,12 +5,19 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
+
+from dotenv import load_dotenv
 
 _DEFAULT_ENVIRONMENT: Final = "development"
 _DEFAULT_LOG_LEVEL: Final = "INFO"
 _VALID_ENVIRONMENTS: Final = frozenset({"development", "test", "production"})
 _VALID_LOG_LEVELS: Final = frozenset({"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"})
+_TRUE_VALUES: Final = frozenset({"1", "true", "yes", "on"})
+_FALSE_VALUES: Final = frozenset({"", "0", "false", "no", "off"})
+_PROJECT_ROOT: Final = Path(__file__).resolve().parents[4]
+_DOTENV_PATH: Final = _PROJECT_ROOT / ".env"
 
 
 class SettingsError(ValueError):
@@ -18,11 +25,31 @@ class SettingsError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class OpenAiLlmSettings:
+    """Credentials and model selection for the optional LLM query planner."""
+
+    api_key: str
+    model: str
+
+
+@dataclass(frozen=True, slots=True)
+class LangSmithTracingSettings:
+    """Optional, explicitly configured tracing for LLM calls."""
+
+    enabled: bool
+    api_key: str | None = None
+    endpoint: str | None = None
+    project: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
-    """The small set of settings needed by the application foundation."""
+    """The settings needed by the application foundation and optional LLM path."""
 
     environment: str
     log_level: str
+    openai: OpenAiLlmSettings | None = None
+    langsmith: LangSmithTracingSettings = LangSmithTracingSettings(enabled=False)
 
 
 def load_settings(
@@ -34,6 +61,8 @@ def load_settings(
     callers use the process environment by accepting the default argument.
     """
 
+    if environment is None:
+        load_dotenv(_DOTENV_PATH, override=False)
     values = os.environ if environment is None else environment
     app_environment = values.get("CHEIRON_ENV", _DEFAULT_ENVIRONMENT).strip().lower()
     if app_environment not in _VALID_ENVIRONMENTS:
@@ -45,4 +74,68 @@ def load_settings(
         allowed = ", ".join(sorted(_VALID_LOG_LEVELS))
         raise SettingsError(f"CHEIRON_LOG_LEVEL must be one of: {allowed}.")
 
-    return Settings(environment=app_environment, log_level=log_level)
+    openai_api_key = _optional_environment_value(values, "OPENAI_API_KEY")
+    openai_model = _optional_environment_value(values, "OPENAI_MODEL")
+    if (openai_api_key is None) != (openai_model is None):
+        raise SettingsError(
+            "OPENAI_API_KEY and OPENAI_MODEL must be set together to enable "
+            "LLM query planning."
+        )
+
+    openai = (
+        OpenAiLlmSettings(api_key=openai_api_key, model=openai_model)
+        if openai_api_key is not None and openai_model is not None
+        else None
+    )
+    langsmith = _load_langsmith_settings(values)
+    return Settings(
+        environment=app_environment,
+        log_level=log_level,
+        openai=openai,
+        langsmith=langsmith,
+    )
+
+
+def _optional_environment_value(
+    environment: Mapping[str, str],
+    name: str,
+) -> str | None:
+    """Return a stripped optional setting without leaking its value."""
+
+    value = environment.get(name)
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _load_langsmith_settings(
+    environment: Mapping[str, str],
+) -> LangSmithTracingSettings:
+    """Validate the LangSmith settings used only at the tracing boundary."""
+
+    enabled = _parse_boolean(environment.get("LANGSMITH_TRACING", ""))
+    api_key = _optional_environment_value(environment, "LANGSMITH_API_KEY")
+    if enabled and api_key is None:
+        raise SettingsError(
+            "LANGSMITH_API_KEY must be set when LANGSMITH_TRACING is enabled."
+        )
+    return LangSmithTracingSettings(
+        enabled=enabled,
+        api_key=api_key,
+        endpoint=_optional_environment_value(environment, "LANGSMITH_ENDPOINT"),
+        project=_optional_environment_value(environment, "LANGSMITH_PROJECT"),
+    )
+
+
+def _parse_boolean(value: object) -> bool:
+    """Parse an environment boolean with clear failure behavior."""
+
+    if not isinstance(value, str):
+        raise SettingsError("LANGSMITH_TRACING must be a boolean value.")
+    normalized = value.strip().lower()
+    if normalized in _TRUE_VALUES:
+        return True
+    if normalized in _FALSE_VALUES:
+        return False
+    raise SettingsError("LANGSMITH_TRACING must be a boolean value.")

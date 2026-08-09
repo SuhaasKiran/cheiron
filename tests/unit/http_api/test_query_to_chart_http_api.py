@@ -7,6 +7,7 @@ import json
 from dataclasses import dataclass, field
 from typing import cast
 
+import pytest
 from cheiron_core.chart_data_builder import ChartDataBuilderError
 from cheiron_core.clinicaltrials import ClinicalTrialsRecordMappingError
 from cheiron_core.models import (
@@ -19,6 +20,7 @@ from cheiron_core.models import (
 from cheiron_core.query_planning import UnsupportedQueryError
 from cheiron_core.query_to_chart import IncompleteTrialRetrievalError
 from cheiron_core.request_validation import RequestValidationError
+from cheiron_core.settings import OpenAiLlmSettings, Settings
 from cheiron_core.trial_retrieval import TrialRetrievalDependencyError
 from fastapi.testclient import TestClient
 from starlette.types import Message, Receive, Scope, Send
@@ -283,3 +285,41 @@ def test_endpoint_enforces_response_body_size() -> None:
             "message": "Chart response exceeds the server response limit.",
         }
     }
+
+
+def test_default_app_uses_the_llm_planner_when_openai_is_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import cheiron_core.http_api as http_api
+
+    class FakeDspyProgram:
+        def __init__(self, *, api_key: str, model: str) -> None:
+            self.api_key = api_key
+            self.model = model
+
+        def run(self, *, question: str, explicit_filters_json: str) -> str:
+            return """
+                {
+                  "is_supported": false,
+                  "visualization_needed": false,
+                  "clinicaltrials_query": {},
+                  "reason": "The question is incomplete."
+                }
+            """
+
+    monkeypatch.setattr(http_api, "DspyClinicalTrialsQueryProgram", FakeDspyProgram)
+    app = http_api.create_default_http_api(
+        Settings(
+            environment="test",
+            log_level="INFO",
+            openai=OpenAiLlmSettings(api_key="test-key", model="test-model"),
+        )
+    )
+
+    status, _, response = invoke(
+        TestClient(app),
+        body=b'{"query":"Show trials by phase.","filters":{}}',
+    )
+
+    assert status == 422
+    assert error_code(response) == "unsupported_query"
