@@ -570,18 +570,102 @@ def _success_response(
     response: VisualizationBatchResponse,
     max_response_bytes: int,
 ) -> Response:
-    body = _encode_json(response.to_dict())
+    payload = response.to_dict()
+    body = _encode_json(payload)
     if len(body) > max_response_bytes:
+        payload = json.loads(body)
+        body, citations_trimmed = _trim_citations_to_fit(
+            payload,
+            max_response_bytes,
+        )
+        if len(body) <= max_response_bytes:
+            _LOGGER.debug(
+                "chart_response_citations_trimmed response_bytes=%d limit=%d",
+                len(body),
+                max_response_bytes,
+            )
+            return Response(
+                content=body,
+                media_type=_JSON_CONTENT_TYPE,
+                headers={"Cache-Control": "no-store"},
+            )
+        citations_present = bool(_citation_rows(payload))
         raise HttpApiError(
-            500,
-            "response_too_large",
-            "Chart response exceeds the server response limit.",
+            422,
+            "visualization_response_too_large",
+            (
+                "Chart response exceeds the server response limit. Narrow the query "
+                "or set include_citations to false."
+                if citations_trimmed or citations_present
+                else (
+                    "Chart response exceeds the server response limit. "
+                    "Narrow the query."
+                )
+            ),
         )
     return Response(
         content=body,
         media_type=_JSON_CONTENT_TYPE,
         headers={"Cache-Control": "no-store"},
     )
+
+
+def _trim_citations_to_fit(
+    payload: dict[str, object],
+    max_response_bytes: int,
+) -> tuple[bytes, bool]:
+    """Fairly remove only extra citations until the serialized response fits.
+
+    Every visualized item retains its first citation. If even that minimum
+    traceability payload cannot fit, the caller returns a clear client error.
+    """
+
+    citation_rows = _citation_rows(payload)
+    citations_trimmed = False
+    body = _encode_json(payload)
+    while len(body) > max_response_bytes:
+        removed_this_round = False
+        for result, row in citation_rows:
+            citations = row.get("citations")
+            if not isinstance(citations, list) or len(citations) <= 1:
+                continue
+            citations.pop()
+            row["citations_truncated"] = True
+            meta = result.get("meta")
+            if isinstance(meta, dict):
+                meta["citations_truncated"] = True
+            citations_trimmed = True
+            removed_this_round = True
+        if not removed_this_round:
+            break
+        body = _encode_json(payload)
+    return body, citations_trimmed
+
+
+def _citation_rows(
+    payload: dict[str, object],
+) -> tuple[tuple[dict[str, object], dict[str, object]], ...]:
+    """Return citation-bearing data and node rows in stable response order."""
+
+    raw_results = payload.get("results")
+    if not isinstance(raw_results, list):
+        return ()
+
+    rows: list[tuple[dict[str, object], dict[str, object]]] = []
+    for result in raw_results:
+        if not isinstance(result, dict):
+            continue
+        visualization = result.get("visualization")
+        if not isinstance(visualization, dict):
+            continue
+        for field_name in ("data", "nodes"):
+            values = visualization.get(field_name)
+            if not isinstance(values, list):
+                continue
+            for row in values:
+                if isinstance(row, dict) and isinstance(row.get("citations"), list):
+                    rows.append((result, row))
+    return tuple(rows)
 
 
 def _error_response(

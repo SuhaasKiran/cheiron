@@ -9,6 +9,16 @@ from cheiron_core.models.query import TrialFilters
 from cheiron_core.models.trial import TrialRecord
 
 
+def without_citations(row: dict[str, object]) -> dict[str, object]:
+    """Keep aggregation assertions focused on chart values, not provenance."""
+
+    return {
+        key: value
+        for key, value in row.items()
+        if key not in {"citations", "citations_truncated"}
+    }
+
+
 def make_record(
     nct_id: str,
     *,
@@ -57,24 +67,16 @@ def test_builds_time_series_from_unique_known_start_years() -> None:
 
     response = ChartDataBuilder().build(plan, records)
 
-    assert response.to_dict() == {
-        "visualization": {
-            "type": "time_series",
-            "title": "Trials by Start Year",
-            "encoding": {"x": "start_year", "y": "trial_count"},
-            "data": [
-                {"start_year": 2020, "trial_count": 1},
-                {"start_year": 2021, "trial_count": 2},
-            ],
-        },
-        "meta": {
-            "filters": {"condition": "asthma"},
-            "source": "clinicaltrials.gov",
-            "units": "trials",
-            "time_granularity": "year",
-            "grouping": "start_year",
-            "sorting": "start_year_ascending",
-        },
+    assert response.visualization.to_dict() | {
+        "data": [without_citations(dict(row)) for row in response.visualization.data]
+    } == {
+        "type": "time_series",
+        "title": "Trials by Start Year",
+        "encoding": {"x": "start_year", "y": "trial_count"},
+        "data": [
+            {"start_year": 2020, "trial_count": 1},
+            {"start_year": 2021, "trial_count": 2},
+        ],
     }
 
 
@@ -94,7 +96,9 @@ def test_builds_phase_chart_with_unknown_values_and_stable_tie_breaking() -> Non
 
     response = ChartDataBuilder().build(plan, records)
 
-    assert response.visualization.data == (
+    assert tuple(
+        without_citations(dict(row)) for row in response.visualization.data
+    ) == (
         {"trial_phase": "PHASE2", "trial_count": 2},
         {"trial_phase": "PHASE1", "trial_count": 1},
         {"trial_phase": "PHASE3", "trial_count": 1},

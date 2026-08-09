@@ -87,6 +87,7 @@ class VisualizationMeta:
     retrieved_study_count: int | None = None
     source_trial_ids: tuple[str, ...] | None = None
     query_plan: Mapping[str, object] | None = None
+    citations_truncated: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.filters, TrialFilters):
@@ -102,6 +103,8 @@ class VisualizationMeta:
         object.__setattr__(self, "sorting", optional_text(self.sorting, "sorting"))
         if type(self.truncated) is not bool:
             raise ModelValidationError("truncated must be a boolean.")
+        if type(self.citations_truncated) is not bool:
+            raise ModelValidationError("citations_truncated must be a boolean.")
         object.__setattr__(
             self,
             "source_query",
@@ -162,6 +165,8 @@ class VisualizationMeta:
                 result[field_name] = value
         if self.truncated:
             result["truncated"] = True
+        if self.citations_truncated:
+            result["citations_truncated"] = True
         if self.source_query is not None:
             result["source_query"] = dict(self.source_query)
         for field_name in ("source_total_count", "retrieved_study_count"):

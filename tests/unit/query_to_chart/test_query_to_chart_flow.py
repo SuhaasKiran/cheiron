@@ -30,6 +30,16 @@ from cheiron_core.trial_retrieval import (
 )
 
 
+def without_citations(row: dict[str, object]) -> dict[str, object]:
+    """Keep flow assertions focused on chart values rather than provenance."""
+
+    return {
+        key: value
+        for key, value in row.items()
+        if key not in {"citations", "citations_truncated"}
+    }
+
+
 @dataclass
 class FakePlanner:
     result: QueryPlan | tuple[QueryPlan, ...]
@@ -162,7 +172,9 @@ def test_flow_validates_plans_retrieves_maps_and_builds_a_chart() -> None:
         )
     ]
     assert retriever.plans == [plan]
-    assert response.results[0].visualization.data == (
+    assert tuple(
+        without_citations(dict(row)) for row in response.results[0].visualization.data
+    ) == (
         {"start_year": 2020, "trial_count": 1},
         {"start_year": 2021, "trial_count": 1},
     )
@@ -225,12 +237,12 @@ def test_flow_fetches_independent_plans_in_parallel_and_preserves_result_order()
         ChartType.TIME_SERIES,
         ChartType.BAR_CHART,
     ]
-    assert response.results[0].visualization.data == (
-        {"start_year": 2020, "trial_count": 1},
-    )
-    assert response.results[1].visualization.data == (
-        {"trial_phase": "PHASE2", "trial_count": 1},
-    )
+    assert tuple(
+        without_citations(dict(row)) for row in response.results[0].visualization.data
+    ) == ({"start_year": 2020, "trial_count": 1},)
+    assert tuple(
+        without_citations(dict(row)) for row in response.results[1].visualization.data
+    ) == ({"trial_phase": "PHASE2", "trial_count": 1},)
     assert {plan.chart_type for plan in retriever.plans} == {
         ChartType.TIME_SERIES,
         ChartType.BAR_CHART,

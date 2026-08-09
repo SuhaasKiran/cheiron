@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from cheiron_core.chart_citations import (
+    ChartCitationAnnotator,
+    ChartCitationError,
+    ChartCitationLimitError,
+)
 from cheiron_core.chart_rendering import (
     ChartCapabilityError,
     ChartRendererRegistry,
@@ -30,6 +35,7 @@ class ChartDataBuilder:
 
     def __init__(self, registry: ChartRendererRegistry | None = None) -> None:
         self._registry = registry or create_default_chart_renderer_registry()
+        self._citation_annotator = ChartCitationAnnotator()
 
     def build(
         self,
@@ -42,9 +48,16 @@ class ChartDataBuilder:
             raise ChartDataBuilderError("plan must be a QueryPlan instance.")
         unique_records = self._unique_records(records)
         try:
-            return self._registry.build(plan, unique_records)
+            response = self._registry.build(plan, unique_records)
+            if not plan.include_citations:
+                return response
+            return self._citation_annotator.annotate(plan, unique_records, response)
         except ChartRenderLimitError as error:
             raise ChartDataBuilderLimitError(str(error)) from error
+        except ChartCitationLimitError as error:
+            raise ChartDataBuilderLimitError(str(error)) from error
+        except ChartCitationError as error:
+            raise ChartDataBuilderError(str(error)) from error
         except ChartCapabilityError as error:
             raise ChartDataBuilderError(str(error)) from error
 

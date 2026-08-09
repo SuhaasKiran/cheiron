@@ -7,6 +7,12 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
+from cheiron_core.chart_semantics import (
+    MAX_ENTITY_LABEL_CHARACTERS,
+    MAX_ENTITY_VALUES_PER_RECORD,
+    bounded_network_values,
+    values_for,
+)
 from cheiron_core.models import (
     ChartType,
     GroupBy,
@@ -27,11 +33,9 @@ _NETWORK_ENTITY_GROUPS = frozenset(
         GroupBy.SITE,
     }
 )
-MAX_ENTITY_VALUES_PER_RECORD = 20
 MAX_GROUPED_BAR_ROWS = 2_000
 MAX_NETWORK_NODES = 1_000
 MAX_NETWORK_EDGES = 2_000
-MAX_ENTITY_LABEL_CHARACTERS = 500
 
 
 class ChartCapabilityError(ValueError):
@@ -351,7 +355,7 @@ class ScatterPlotRenderer:
             {
                 "nct_id": record.nct_id,
                 "start_year": record.start_year,
-                count_field: len(_values_for(record, plan.series_by)),
+                count_field: len(values_for(record, plan.series_by)),
             }
             for record in sorted(
                 records, key=lambda item: (item.start_year or 0, item.nct_id)
@@ -498,34 +502,13 @@ def _require_plan_shape(
         )
 
 
-def _values_for(record: TrialRecord, group_by: GroupBy) -> tuple[str | int, ...]:
-    values: tuple[str | int, ...]
-    if group_by is GroupBy.START_YEAR:
-        values = () if record.start_year is None else (record.start_year,)
-    elif group_by is GroupBy.TRIAL_PHASE:
-        values = record.phases
-    elif group_by is GroupBy.INTERVENTION:
-        values = record.interventions
-    elif group_by is GroupBy.SPONSOR:
-        values = () if record.sponsor is None else (record.sponsor,)
-    elif group_by is GroupBy.CONDITION:
-        values = record.conditions
-    elif group_by is GroupBy.INVESTIGATOR:
-        values = record.investigators
-    elif group_by is GroupBy.COUNTRY:
-        values = record.countries
-    else:
-        values = record.sites
-    return values
-
-
 def _group_counts(
     records: Iterable[TrialRecord],
     group_by: GroupBy,
     sort: SortOrder,
 ) -> tuple[dict[str, object], ...]:
     counts: Counter[str | int] = Counter(
-        value for record in records for value in _values_for(record, group_by)
+        value for record in records for value in values_for(record, group_by)
     )
     values = _sort_values(counts, sort)
     return tuple(
@@ -657,7 +640,7 @@ def _bounded_entity_values(
 ) -> tuple[str | int, ...]:
     """Return bounded source values before a multi-entity chart expands them."""
 
-    values = _values_for(record, group_by)
+    values = values_for(record, group_by)
     if len(values) > MAX_ENTITY_VALUES_PER_RECORD:
         raise ChartRenderLimitError(
             f"{group_by.value} exceeds the maximum values allowed per trial."
@@ -681,13 +664,7 @@ def _bounded_network_entity_values(
     expose that loss of detail through their response metadata.
     """
 
-    values = _values_for(record, group_by)
-    valid_values = sorted(
-        (value for value in values if len(str(value)) <= MAX_ENTITY_LABEL_CHARACTERS),
-        key=_text_sort_key,
-    )
-    bounded_values = tuple(valid_values[:MAX_ENTITY_VALUES_PER_RECORD])
-    return bounded_values, len(bounded_values) < len(values)
+    return bounded_network_values(record, group_by)
 
 
 def _bounded_network_graph(

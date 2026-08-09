@@ -24,6 +24,16 @@ from cheiron_core.models import (
 )
 
 
+def without_citations(row: dict[str, object]) -> dict[str, object]:
+    """Keep renderer aggregation assertions independent from provenance rows."""
+
+    return {
+        key: value
+        for key, value in row.items()
+        if key not in {"citations", "citations_truncated"}
+    }
+
+
 def make_record(
     nct_id: str,
     *,
@@ -87,7 +97,9 @@ def test_default_registry_builds_a_grouped_bar_chart() -> None:
         "y": "trial_count",
         "series": "sponsor",
     }
-    assert response.visualization.data == (
+    assert tuple(
+        without_citations(dict(row)) for row in response.visualization.data
+    ) == (
         {"trial_phase": "PHASE1", "sponsor": "Sponsor A", "trial_count": 1},
         {"trial_phase": "PHASE1", "sponsor": "Sponsor B", "trial_count": 1},
         {"trial_phase": "PHASE2", "sponsor": "Sponsor A", "trial_count": 1},
@@ -122,7 +134,9 @@ def test_grouped_bar_chart_limits_an_explicit_drug_comparison_to_named_drugs() -
         ),
     )
 
-    assert response.visualization.data == (
+    assert tuple(
+        without_citations(dict(row)) for row in response.visualization.data
+    ) == (
         {"trial_phase": "PHASE2", "intervention": "Nivolumab", "trial_count": 1},
         {"trial_phase": "PHASE2", "intervention": "Pembrolizumab", "trial_count": 1},
     )
@@ -137,7 +151,9 @@ def test_bar_chart_groups_trials_by_country() -> None:
         ),
     )
 
-    assert response.visualization.data == (
+    assert tuple(
+        without_citations(dict(row)) for row in response.visualization.data
+    ) == (
         {"country": "Canada", "trial_count": 1},
         {"country": "United States", "trial_count": 2},
     )
@@ -168,7 +184,9 @@ def test_default_registry_builds_scatter_and_histogram_views() -> None:
         records,
     )
 
-    assert scatter.visualization.data == (
+    assert tuple(
+        without_citations(dict(row)) for row in scatter.visualization.data
+    ) == (
         {
             "nct_id": "NCT00000001",
             "start_year": 2020,
@@ -185,7 +203,9 @@ def test_default_registry_builds_scatter_and_histogram_views() -> None:
             "intervention_count": 0,
         },
     )
-    assert histogram.visualization.data == (
+    assert tuple(
+        without_citations(dict(row)) for row in histogram.visualization.data
+    ) == (
         {"start_year": 2020, "trial_count": 2},
         {"start_year": 2021, "trial_count": 1},
     )
@@ -218,7 +238,9 @@ def test_default_registry_builds_a_network_of_trial_entities() -> None:
         "target": "target",
         "weight": "trial_count",
     }
-    assert response.visualization.data == (
+    assert tuple(
+        without_citations(dict(row)) for row in response.visualization.data
+    ) == (
         {
             "source": "condition:Asthma",
             "target": "site:Site A",
@@ -230,7 +252,9 @@ def test_default_registry_builds_a_network_of_trial_entities() -> None:
             "trial_count": 1,
         },
     )
-    assert response.visualization.nodes == (
+    assert tuple(
+        without_citations(dict(node)) for node in response.visualization.nodes
+    ) == (
         {"id": "condition:Asthma", "label": "Asthma", "type": "condition"},
         {"id": "site:Site A", "label": "Site A", "type": "site"},
         {"id": "site:Site B", "label": "Site B", "type": "site"},
@@ -273,7 +297,9 @@ def test_network_graph_omits_an_overlong_entity_label_from_one_record() -> None:
         ),
     )
 
-    assert response.visualization.data == (
+    assert tuple(
+        without_citations(dict(row)) for row in response.visualization.data
+    ) == (
         {
             "source": "condition:Asthma",
             "target": "site:Site A",
@@ -312,6 +338,7 @@ def test_network_graph_keeps_the_strongest_edges_within_its_rendering_limit() ->
         "grouping": "condition,site",
         "sorting": "source_ascending,target_ascending",
         "truncated": True,
+        "citations_truncated": True,
     }
 
 

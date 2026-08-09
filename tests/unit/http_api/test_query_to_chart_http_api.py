@@ -80,6 +80,46 @@ def make_response() -> VisualizationBatchResponse:
     )
 
 
+def make_citation_response(
+    citation_count: int,
+    *,
+    evidence_size: int = 160,
+) -> VisualizationBatchResponse:
+    """Build a response whose citations can be safely trimmed at the HTTP boundary."""
+
+    citations = [
+        {
+            "nct_id": f"NCT{index:08d}",
+            "evidence": [
+                {
+                    "field": "protocolSection.designModule.phases",
+                    "value": "P" * evidence_size,
+                }
+            ],
+        }
+        for index in range(1, citation_count + 1)
+    ]
+    return VisualizationBatchResponse(
+        results=(
+            VisualizationResponse(
+                visualization=VisualizationSpec(
+                    chart_type=ChartType.BAR_CHART,
+                    title="Trials by Phase",
+                    encoding={"x": "trial_phase", "y": "trial_count"},
+                    data=(
+                        {
+                            "trial_phase": "PHASE3",
+                            "trial_count": 41,
+                            "citations": citations,
+                        },
+                    ),
+                ),
+                meta=VisualizationMeta(filters=TrialFilters(condition="Melanoma")),
+            ),
+        ),
+    )
+
+
 def invoke(
     client: TestClient,
     *,
@@ -398,13 +438,82 @@ def test_endpoint_enforces_response_body_size() -> None:
         TestClient(create_http_api(flow, max_response_bytes=20))
     )
 
-    assert status == 500
+    assert status == 422
     assert response == {
         "error": {
-            "code": "response_too_large",
-            "message": "Chart response exceeds the server response limit.",
+            "code": "visualization_response_too_large",
+            "message": (
+                "Chart response exceeds the server response limit. Narrow the query."
+            ),
         }
     }
+
+
+def test_endpoint_trims_extra_citations_to_fit_the_response_limit() -> None:
+    from cheiron_core.http_api import create_http_api
+
+    one_citation_response = make_citation_response(1)
+    two_citation_response = make_citation_response(2)
+    one_citation_size = _compact_json_size(one_citation_response.to_dict())
+    two_citation_size = _compact_json_size(two_citation_response.to_dict())
+    max_response_bytes = (one_citation_size + two_citation_size) // 2
+
+    status, _, response = invoke(
+        TestClient(
+            create_http_api(
+                FakeQueryToChartFlow(two_citation_response),
+                max_response_bytes=max_response_bytes,
+            )
+        )
+    )
+
+    assert status == 200
+    result = response["results"]
+    assert isinstance(result, list)
+    visualization = result[0]["visualization"]
+    assert isinstance(visualization, dict)
+    data = visualization["data"]
+    assert isinstance(data, list)
+    assert data[0]["citations_truncated"] is True
+    assert len(data[0]["citations"]) == 1
+    meta = result[0]["meta"]
+    assert isinstance(meta, dict)
+    assert meta["citations_truncated"] is True
+
+
+def test_endpoint_explains_when_the_minimum_citation_payload_cannot_fit() -> None:
+    from cheiron_core.http_api import create_http_api
+
+    response_with_one_citation = make_citation_response(1, evidence_size=300)
+    max_response_bytes = _compact_json_size(response_with_one_citation.to_dict()) - 1
+
+    status, _, response = invoke(
+        TestClient(
+            create_http_api(
+                FakeQueryToChartFlow(response_with_one_citation),
+                max_response_bytes=max_response_bytes,
+            )
+        )
+    )
+
+    assert status == 422
+    assert response == {
+        "error": {
+            "code": "visualization_response_too_large",
+            "message": (
+                "Chart response exceeds the server response limit. Narrow the query "
+                "or set include_citations to false."
+            ),
+        }
+    }
+
+
+def _compact_json_size(payload: object) -> int:
+    """Match the HTTP adapter's compact UTF-8 JSON serialization."""
+
+    return len(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
 
 
 def test_default_app_uses_the_llm_planner_when_openai_is_configured(

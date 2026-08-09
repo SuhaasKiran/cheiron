@@ -37,6 +37,18 @@ def test_validator_accepts_a_bounded_drug_comparison_list() -> None:
     assert request.filters.drug_names == ("Pembrolizumab", "Nivolumab")
 
 
+def test_validator_accepts_the_optional_citation_preference() -> None:
+    request = RequestValidator().validate(
+        {
+            "query": "Show melanoma trials by phase.",
+            "filters": {"condition": "Melanoma"},
+            "include_citations": False,
+        }
+    )
+
+    assert request.include_citations is False
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
@@ -44,6 +56,10 @@ def test_validator_accepts_a_bounded_drug_comparison_list() -> None:
         ({"query": "trials by phase", "filters": {"site": "Boston"}}, "site"),
         ({"query": "trials by phase", "filters": []}, "filters must be an object"),
         ({"query": "trials by phase", "filters": {"start_year": True}}, "integer"),
+        (
+            {"query": "trials by phase", "include_citations": "no"},
+            "include_citations must be a boolean",
+        ),
         ({"filters": {}}, "query"),
         (
             {"query": "compare drugs", "filters": {"drug_names": []}},

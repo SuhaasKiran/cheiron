@@ -170,6 +170,21 @@ def test_llm_planner_preserves_explicit_request_filters_over_model_output() -> N
     assert plan.filters == TrialFilters(condition="Melanoma", start_year=2020)
 
 
+def test_llm_planner_preserves_the_citation_preference() -> None:
+    planner = LlmQueryPlanner(
+        FakeInterpreter(supported_time_series_interpretation(condition="Melanoma"))
+    )
+
+    plan = planner.plan(
+        TrialQueryRequest(
+            query="Show yearly trials for melanoma.",
+            include_citations=False,
+        )
+    )
+
+    assert plan.include_citations is False
+
+
 def test_llm_planner_uses_the_constrained_multi_drug_plan_without_llm_output() -> None:
     planner = LlmQueryPlanner(
         FakeInterpreter(QueryInterpretationProviderError("must not be called"))

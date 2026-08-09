@@ -99,10 +99,11 @@ class TrialFilters:
 
 @dataclass(frozen=True, slots=True)
 class TrialQueryRequest:
-    """A natural-language question and optional structured trial filters."""
+    """A natural-language question, filters, and response-detail preferences."""
 
     query: str
     filters: TrialFilters = TrialFilters()
+    include_citations: bool = True
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -112,3 +113,5 @@ class TrialQueryRequest:
         )
         if not isinstance(self.filters, TrialFilters):
             raise ModelValidationError("filters must be a TrialFilters instance.")
+        if type(self.include_citations) is not bool:
+            raise ModelValidationError("include_citations must be a boolean.")

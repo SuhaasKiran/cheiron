@@ -895,6 +895,7 @@ class LlmQueryPlanner:
             group_by=GroupBy.TRIAL_PHASE,
             series_by=GroupBy.INTERVENTION,
             comparison_values=request.filters.drug_names,
+            include_citations=request.include_citations,
             measure=Measure.TRIAL_COUNT,
             sort=SortOrder.ASCENDING,
         )
@@ -941,6 +942,7 @@ class LlmQueryPlanner:
             chart_type=interpretation.chart_type,
             group_by=interpretation.group_by,
             series_by=interpretation.series_by,
+            include_citations=request.include_citations,
             measure=Measure.TRIAL_COUNT,
             sort=SortOrder.ASCENDING,
         )

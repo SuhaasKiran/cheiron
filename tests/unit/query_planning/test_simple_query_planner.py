@@ -30,6 +30,14 @@ def test_planner_creates_a_yearly_trial_count_plan() -> None:
     assert plan.sort is SortOrder.ASCENDING
 
 
+def test_planner_preserves_the_citation_preference_in_the_chart_plan() -> None:
+    plan = SimpleQueryPlanner().plan(
+        TrialQueryRequest(query="Show trials by phase.", include_citations=False)
+    )
+
+    assert plan.include_citations is False
+
+
 def test_planner_creates_a_phase_distribution_plan() -> None:
     plan = SimpleQueryPlanner().plan(
         TrialQueryRequest(query="Show trials by phase for pembrolizumab.")

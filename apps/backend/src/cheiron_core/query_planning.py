@@ -175,6 +175,7 @@ class SimpleQueryPlanner:
             group_by=group_by,
             series_by=series_by,
             comparison_values=comparison_values,
+            include_citations=request.include_citations,
             measure=Measure.TRIAL_COUNT,
             sort=SortOrder.ASCENDING,
         )

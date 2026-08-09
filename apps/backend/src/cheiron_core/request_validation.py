@@ -7,7 +7,7 @@ from collections.abc import Mapping
 
 from cheiron_core.models import ModelValidationError, TrialFilters, TrialQueryRequest
 
-_REQUEST_FIELDS = frozenset({"query", "filters"})
+_REQUEST_FIELDS = frozenset({"query", "filters", "include_citations"})
 _FILTER_FIELDS = frozenset(
     {"drug_name", "drug_names", "condition", "trial_phase", "start_year", "end_year"}
 )
@@ -39,6 +39,9 @@ class RequestValidator:
         try:
             return TrialQueryRequest(
                 query=self._require_text(request.get("query"), "query"),
+                include_citations=self._optional_boolean(
+                    request.get("include_citations"), "include_citations", default=True
+                ),
                 filters=TrialFilters(
                     drug_name=self._optional_text(
                         filters.get("drug_name"), "drug_name"
@@ -103,6 +106,14 @@ class RequestValidator:
             return None
         if type(value) is not int:
             raise RequestValidationError(f"{field_name} must be an integer year.")
+        return value
+
+    @staticmethod
+    def _optional_boolean(value: object, field_name: str, *, default: bool) -> bool:
+        if value is None:
+            return default
+        if type(value) is not bool:
+            raise RequestValidationError(f"{field_name} must be a boolean.")
         return value
 
     @classmethod

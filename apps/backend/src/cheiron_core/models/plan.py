@@ -55,6 +55,7 @@ class QueryPlan:
     group_by: GroupBy
     series_by: GroupBy | None = None
     comparison_values: tuple[str, ...] = ()
+    include_citations: bool = True
     measure: Measure = Measure.TRIAL_COUNT
     sort: SortOrder = SortOrder.ASCENDING
 
@@ -99,6 +100,8 @@ class QueryPlan:
                     "comparison_values must match filters.drug_names."
                 )
             object.__setattr__(self, "comparison_values", normalized)
+        if type(self.include_citations) is not bool:
+            raise ModelValidationError("include_citations must be a boolean.")
         if not isinstance(self.measure, Measure):
             raise ModelValidationError("measure must be a supported Measure value.")
         if not isinstance(self.sort, SortOrder):

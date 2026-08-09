@@ -54,6 +54,42 @@ def load_json(path: Path) -> dict[str, object]:
     return value
 
 
+def visualization_without_citations(
+    visualization: Mapping[str, object],
+) -> dict[str, object]:
+    """Compare chart semantics while citation assertions stay explicit below."""
+
+    normalized = dict(visualization)
+    data = normalized.get("data")
+    assert isinstance(data, list)
+    normalized_data = [
+        {
+            key: value
+            for key, value in row.items()
+            if key not in {"citations", "citations_truncated"}
+        }
+        for row in data
+        if isinstance(row, dict)
+    ]
+    assert len(normalized_data) == len(data)
+    normalized["data"] = normalized_data
+    nodes = normalized.get("nodes")
+    if nodes is not None:
+        assert isinstance(nodes, list)
+        normalized_nodes = [
+            {
+                key: value
+                for key, value in node.items()
+                if key not in {"citations", "citations_truncated"}
+            }
+            for node in nodes
+            if isinstance(node, dict)
+        ]
+        assert len(normalized_nodes) == len(nodes)
+        normalized["nodes"] = normalized_nodes
+    return normalized
+
+
 def make_fixture_client(
     query_planner: SimpleQueryPlanner | FixtureMultiPlanner | None = None,
 ) -> tuple[TestClient, FixtureTransport]:
@@ -162,10 +198,14 @@ def test_extended_charts_match_the_full_local_http_flow(
     response = client.post("/api/v1/charts", json=chart_request)
 
     assert response.status_code == 200
-    assert response.json() == {
+    result = response.json()
+    visualization = result["results"][0]["visualization"]
+    assert isinstance(visualization, dict)
+    assert visualization_without_citations(visualization) == expected_visualization
+    assert result == {
         "results": [
             {
-                "visualization": expected_visualization,
+                "visualization": visualization,
                 "meta": {
                     "filters": {"condition": "Congenital Adrenal Hyperplasia"},
                     "source": "clinicaltrials.gov",
@@ -254,7 +294,9 @@ def test_explicit_multi_drug_comparison_uses_the_full_http_flow() -> None:
 
     assert response.status_code == 200
     result = response.json()["results"][0]
-    assert result["visualization"] == {
+    visualization = result["visualization"]
+    assert isinstance(visualization, dict)
+    assert visualization_without_citations(visualization) == {
         "type": "grouped_bar_chart",
         "title": "Trials by Phase and Intervention",
         "encoding": {
@@ -275,6 +317,25 @@ def test_explicit_multi_drug_comparison_uses_the_full_http_flow() -> None:
             },
         ],
     }
+    data = visualization["data"]
+    assert isinstance(data, list)
+    assert data[0]["citations"] == [
+        {
+            "nct_id": "NCT00000102",
+            "evidence": [
+                {
+                    "field": "protocolSection.designModule.phases",
+                    "value": "PHASE1",
+                },
+                {
+                    "field": (
+                        "protocolSection.armsInterventionsModule.interventions.name"
+                    ),
+                    "value": "Nifedipine",
+                },
+            ],
+        }
+    ]
     assert result["meta"]["query_plan"]["comparison_values"] == [
         "Nifedipine",
         "Not present",
@@ -282,3 +343,23 @@ def test_explicit_multi_drug_comparison_uses_the_full_http_flow() -> None:
     assert parse_qs(urlparse(transport.urls[0]).query)["query.cond"] == [
         "Congenital Adrenal Hyperplasia"
     ]
+
+
+def test_http_chart_request_can_disable_deep_citations() -> None:
+    client, _ = make_fixture_client()
+
+    response = client.post(
+        "/api/v1/charts",
+        json={
+            "query": "Show trials by phase.",
+            "filters": {"condition": "Congenital Adrenal Hyperplasia"},
+            "include_citations": False,
+        },
+    )
+
+    assert response.status_code == 200
+    visualization = response.json()["results"][0]["visualization"]
+    assert isinstance(visualization, dict)
+    data = visualization["data"]
+    assert isinstance(data, list)
+    assert all("citations" not in row for row in data if isinstance(row, dict))
