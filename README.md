@@ -20,6 +20,19 @@ data, and source metadata.
 4. Builds a visualization specification from the records.
 5. Returns either the requested chart data or a clear, safe error response.
 
+## High-level workflow
+
+```mermaid
+flowchart LR
+    A[User question and optional filters] --> B[Validate request]
+    B --> C[Interpret and plan query]
+    C --> D[Search ClinicalTrials.gov]
+    D --> E[Clean trial records]
+    E --> F[Build chart specification]
+    F --> G[Optional source citations]
+    G --> H[JSON response for the frontend]
+```
+
 The query planner can use DSPy with an OpenAI model when credentials are
 configured. If that service is unavailable, the application falls back to its
 deterministic keyword planner where possible. Optional LangSmith tracing records
