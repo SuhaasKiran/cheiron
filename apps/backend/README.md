@@ -126,11 +126,11 @@ For example, a phase bar can include a citation like this:
 ```
 
 `nct_id` identifies the contributing trial. Each `evidence` entry gives the
-exact ClinicalTrials.gov response field and the field value that supports this
-datum. A grouped bar or network edge has evidence for each grouping value; a
-time-series bucket uses the source start-date value rather than only the derived
-year. Citations are deterministic: matching records are ordered by NCT ID, so a
-same input and source response produces the same citation order.
+ClinicalTrials.gov response field and the normalized field value used to build
+the datum. A grouped bar or network edge has evidence for each grouping value;
+a time-series bucket uses the source start-date value rather than only the
+derived year. Citations are deterministic: matching records are ordered by NCT
+ID, so a same input and source response produces the same citation order.
 
 `chart_citations.py` performs this work after chart rendering. It matches each
 rendered value back to the already retrieved and cleaned `TrialRecord` objects,
@@ -166,6 +166,59 @@ to `false` skips citation enrichment for every result from that request,
 including a multi-request query. Source-level provenance such as
 `source_query`, `source_total_count`, and `source_trial_ids` remains available
 in response metadata; it is separate from per-datum deep citations.
+
+### Citation limits and meaning
+
+Deep citations show **which retrieved records support a displayed value**. They
+do not make a clinical conclusion, prove causation, or replace reading the full
+trial record. A citation also does not include the full source response; it
+contains only the NCT ID and the field values used for the chart.
+
+The backend deliberately limits citation work and response size:
+
+- A chart can have at most 3,000 visible items that need citations. A larger
+  chart returns a clear chart-complexity error rather than silently leaving some
+  visible items without evidence.
+- A visible item normally has up to five citations. Extra matching trials are
+  omitted and marked as truncated.
+- The HTTP response limit can remove further extra citations. It still keeps one
+  citation per visible item when possible. If that minimum response is too large,
+  the caller must narrow the query or disable citations.
+- ClinicalTrials.gov is live data. A later request can return different records
+  or field values, so citations describe the source records retrieved for that
+  particular response.
+
+## Important design considerations and tradeoffs
+
+- **Small, independent components:** validation, planning, retrieval, record
+  mapping, chart rendering, citations, and HTTP delivery have separate owners.
+  This makes unit tests and changes simpler. The tradeoff is more modules than a
+  small single-file prototype.
+
+- **Validated plans before external calls:** user text and LLM output become a
+  restricted `QueryPlan` before they are used for a ClinicalTrials.gov search.
+  This reduces hallucinated or unsupported searches. The tradeoff is that some
+  useful but unfamiliar question wording can be rejected rather than guessed.
+
+- **Pure chart logic:** renderers work with cleaned `TrialRecord` values, not
+  HTTP or ClinicalTrials.gov objects. This keeps chart behavior deterministic
+  and easy to test. The tradeoff is that a new source field must first be added
+  to the record mapper before a chart can use it.
+
+- **Bounded work instead of hidden partial results:** source retrieval, chart
+  complexity, citations, LLM calls, and HTTP payloads have limits. The backend
+  returns a clear error or explicit truncation metadata rather than pretending a
+  partial result is complete. The tradeoff is that broad questions may need to
+  be narrowed by the caller.
+
+- **Traceability by default:** citations and response provenance help a client
+  inspect where chart data came from. They make responses larger, so callers can
+  set `include_citations` to `false` when response size matters more than
+  datum-level traceability.
+
+- **Per-process protections:** the built-in HTTP and LLM rate limits keep one
+  backend process safe. A deployment with multiple replicas needs a shared edge
+  or data-store rate limiter for one global quota.
 
 ## Error handling
 
