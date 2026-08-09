@@ -100,20 +100,30 @@ def _interpret_line(
     try:
         payload = json.loads(line)
         request = RequestValidator().validate(payload)
-        interpretation = interpreter.interpret(request)
-        query_parameters = interpretation.clinicaltrials_query.to_api_query_parameters()
+        interpretations = interpreter.interpret(request)
+        query_parameters = tuple(
+            interpretation.clinicaltrials_query.to_api_query_parameters()
+            for interpretation in interpretations.requests
+        )
         result: dict[str, object] = {
             "line": line_number,
             "status": "ok",
-            "interpretation": interpretation.model_dump(mode="json"),
-            "clinicaltrials_gov_query": query_parameters,
+            "interpretations": interpretations.model_dump(mode="json"),
+            "clinicaltrials_gov_queries": list(query_parameters),
         }
         if query_fetcher is not None:
-            result["clinicaltrials_gov_fetch"] = (
-                _fetch_query(query_fetcher, query_parameters)
-                if interpretation.is_supported
-                else {"status": "skipped", "reason": "query_not_supported"}
-            )
+            result["clinicaltrials_gov_fetches"] = [
+                (
+                    _fetch_query(query_fetcher, parameters)
+                    if interpretation.is_supported
+                    else {"status": "skipped", "reason": "query_not_supported"}
+                )
+                for interpretation, parameters in zip(
+                    interpretations.requests,
+                    query_parameters,
+                    strict=True,
+                )
+            ]
         return result
     except (
         json.JSONDecodeError,

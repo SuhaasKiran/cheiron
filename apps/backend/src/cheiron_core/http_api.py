@@ -36,15 +36,21 @@ from cheiron_core.llm_query_planning import (
     LlmQueryPlannerError,
     TracedDspyQueryProgram,
 )
-from cheiron_core.models import VisualizationResponse
+from cheiron_core.models import VisualizationBatchResponse
 from cheiron_core.query_planning import SimpleQueryPlanner, UnsupportedQueryError
 from cheiron_core.query_to_chart import (
     IncompleteTrialRetrievalError,
     QueryToChartFlow,
+    TrialResultLimitExceededError,
 )
 from cheiron_core.request_validation import RequestValidationError, RequestValidator
 from cheiron_core.settings import Settings, load_settings
-from cheiron_core.trial_retrieval import TrialRetrievalDependencyError, TrialRetriever
+from cheiron_core.trial_retrieval import (
+    TrialRetrievalDependencyError,
+    TrialRetrievalQueryError,
+    TrialRetrievalSourceDataError,
+    TrialRetriever,
+)
 
 CHARTS_PATH = "/api/v1/charts"
 DEFAULT_MAX_REQUEST_BYTES = 8_192
@@ -59,8 +65,8 @@ _LOGGER = logging.getLogger("uvicorn.error.cheiron_core.http_api")
 class QueryToChartExecutor(Protocol):
     """The narrow application-flow contract used by the HTTP adapter."""
 
-    def execute(self, payload: object) -> VisualizationResponse:
-        """Return a visualization response for one validated HTTP payload."""
+    def execute(self, payload: object) -> VisualizationBatchResponse:
+        """Return visualization responses for one validated HTTP payload."""
 
 
 class HttpApiError(Exception):
@@ -198,12 +204,43 @@ def create_http_api(
     @app.exception_handler(TrialRetrievalDependencyError)
     async def handle_retrieval_dependency_error(
         _: Request,
-        __: TrialRetrievalDependencyError,
+        error: TrialRetrievalDependencyError,
     ) -> JSONResponse:
+        source_error = error.__cause__
+        source_cause = source_error.__cause__ if source_error is not None else None
+        _LOGGER.debug(
+            "chart_http_source_unavailable dependency_error_type=%s "
+            "source_error_type=%s source_cause_type=%s",
+            type(error).__name__,
+            type(source_error).__name__ if source_error is not None else "none",
+            type(source_cause).__name__ if source_cause is not None else "none",
+        )
         return _error_response(
             503,
             "source_unavailable",
             "ClinicalTrials.gov is temporarily unavailable.",
+        )
+
+    @app.exception_handler(TrialRetrievalQueryError)
+    async def handle_retrieval_query_error(
+        _: Request,
+        __: TrialRetrievalQueryError,
+    ) -> JSONResponse:
+        return _error_response(
+            422,
+            "source_query_invalid",
+            "ClinicalTrials.gov could not process the requested query.",
+        )
+
+    @app.exception_handler(TrialRetrievalSourceDataError)
+    async def handle_retrieval_source_data_error(
+        _: Request,
+        __: TrialRetrievalSourceDataError,
+    ) -> JSONResponse:
+        return _error_response(
+            502,
+            "source_data_invalid",
+            "ClinicalTrials.gov returned data that could not be used.",
         )
 
     @app.exception_handler(IncompleteTrialRetrievalError)
@@ -215,6 +252,20 @@ def create_http_api(
             503,
             "source_result_incomplete",
             "ClinicalTrials.gov returned an incomplete result.",
+        )
+
+    @app.exception_handler(TrialResultLimitExceededError)
+    async def handle_result_limit_exceeded_error(
+        _: Request,
+        error: TrialResultLimitExceededError,
+    ) -> JSONResponse:
+        return _error_response(
+            422,
+            "source_result_too_large",
+            "This query matches "
+            f"{error.total_count:,} trials, which exceeds the "
+            f"{error.max_studies:,}-trial limit. Narrow the query with a condition, "
+            "intervention, phase, or date-range filter.",
         )
 
     @app.exception_handler(ClinicalTrialsRecordMappingError)
@@ -315,9 +366,9 @@ def create_http_api(
         )
         chart_response = await run_in_threadpool(flow.execute, payload)
         _LOGGER.debug(
-            "chart_request_completed chart_type=%s data_points=%d",
-            chart_response.visualization.chart_type.value,
-            len(chart_response.visualization.data),
+            "chart_request_completed result_count=%d data_points=%d",
+            len(chart_response.results),
+            sum(len(result.visualization.data) for result in chart_response.results),
         )
         return _success_response(chart_response, max_response_bytes)
 
@@ -336,7 +387,10 @@ def create_default_http_api(settings: Settings | None = None) -> FastAPI:
             application_settings,
             chart_registry,
         ),
-        trial_retriever=TrialRetriever(api_client),
+        trial_retriever=TrialRetriever(
+            api_client,
+            max_studies=application_settings.retrieval_max_studies,
+        ),
         chart_data_builder=ChartDataBuilder(chart_registry),
     )
     return create_http_api(flow)
@@ -405,7 +459,7 @@ async def _parse_request_json(request: Request) -> object:
 
 
 def _success_response(
-    response: VisualizationResponse,
+    response: VisualizationBatchResponse,
     max_response_bytes: int,
 ) -> Response:
     body = _encode_json(response.to_dict())

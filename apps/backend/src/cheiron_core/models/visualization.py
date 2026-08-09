@@ -131,3 +131,31 @@ class VisualizationResponse:
             "visualization": self.visualization.to_dict(),
             "meta": self.meta.to_dict(),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class VisualizationBatchResponse:
+    """An ordered collection of complete chart responses for one user question."""
+
+    results: tuple[VisualizationResponse, ...]
+
+    def __post_init__(self) -> None:
+        if not self.results:
+            raise ModelValidationError(
+                "results must contain at least one chart response."
+            )
+        if len(self.results) > 5:
+            raise ModelValidationError(
+                "results must contain at most 5 chart responses."
+            )
+        if not all(
+            isinstance(result, VisualizationResponse) for result in self.results
+        ):
+            raise ModelValidationError(
+                "results must contain VisualizationResponse instances."
+            )
+
+    def to_dict(self) -> dict[str, object]:
+        """Return the stable multi-chart response shape for the HTTP API."""
+
+        return {"results": [result.to_dict() for result in self.results]}

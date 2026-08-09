@@ -16,6 +16,8 @@ _DEFAULT_LLM_MAX_CONCURRENT_REQUESTS: Final = 4
 _MAX_LLM_MAX_CONCURRENT_REQUESTS: Final = 32
 _DEFAULT_LLM_MAX_REQUESTS_PER_MINUTE: Final = 60
 _MAX_LLM_MAX_REQUESTS_PER_MINUTE: Final = 600
+_DEFAULT_RETRIEVAL_MAX_STUDIES: Final = 1_000
+_MAX_RETRIEVAL_MAX_STUDIES: Final = 10_000
 _VALID_ENVIRONMENTS: Final = frozenset({"development", "test", "production"})
 _VALID_LOG_LEVELS: Final = frozenset({"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"})
 _TRUE_VALUES: Final = frozenset({"1", "true", "yes", "on"})
@@ -54,6 +56,7 @@ class Settings:
 
     environment: str
     log_level: str
+    retrieval_max_studies: int = _DEFAULT_RETRIEVAL_MAX_STUDIES
     openai: OpenAiLlmSettings | None = None
     langsmith: LangSmithTracingSettings = LangSmithTracingSettings(enabled=False)
 
@@ -102,6 +105,7 @@ def load_settings(
     return Settings(
         environment=app_environment,
         log_level=log_level,
+        retrieval_max_studies=_load_retrieval_max_studies(values),
         openai=openai,
         langsmith=langsmith,
     )
@@ -156,6 +160,24 @@ def _load_llm_max_requests_per_minute(environment: Mapping[str, str]) -> int:
         raise SettingsError(
             "CHEIRON_LLM_MAX_REQUESTS_PER_MINUTE must be between 1 and "
             f"{_MAX_LLM_MAX_REQUESTS_PER_MINUTE}."
+        )
+    return value
+
+
+def _load_retrieval_max_studies(environment: Mapping[str, str]) -> int:
+    """Load the bounded number of source records allowed for one chart."""
+
+    raw_value = environment.get(
+        "CHEIRON_RETRIEVAL_MAX_STUDIES",
+        str(_DEFAULT_RETRIEVAL_MAX_STUDIES),
+    )
+    if not raw_value.isdecimal():
+        raise SettingsError("CHEIRON_RETRIEVAL_MAX_STUDIES must be a positive integer.")
+    value = int(raw_value)
+    if not 1 <= value <= _MAX_RETRIEVAL_MAX_STUDIES:
+        raise SettingsError(
+            "CHEIRON_RETRIEVAL_MAX_STUDIES must be between 1 and "
+            f"{_MAX_RETRIEVAL_MAX_STUDIES}."
         )
     return value
 

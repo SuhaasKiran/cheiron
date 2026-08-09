@@ -12,6 +12,7 @@ from cheiron_core.llm_query_planning import (
     BoundedLlmQueryPlanner,
     ClinicalTrialsGovQuery,
     ClinicalTrialsQueryInterpretation,
+    ClinicalTrialsQueryInterpretationBatch,
     DspyClinicalTrialsQueryInterpreter,
     LangSmithDspyQueryProgramTracer,
     LlmPlanningCapacityError,
@@ -34,15 +35,20 @@ from cheiron_core.settings import LangSmithTracingSettings
 
 @dataclass
 class FakeInterpreter:
-    result: ClinicalTrialsQueryInterpretation | Exception
+    result: (
+        ClinicalTrialsQueryInterpretation
+        | tuple[ClinicalTrialsQueryInterpretation, ...]
+        | Exception
+    )
 
     def interpret(
         self,
         request: TrialQueryRequest,
-    ) -> ClinicalTrialsQueryInterpretation:
+    ) -> ClinicalTrialsQueryInterpretationBatch:
         if isinstance(self.result, Exception):
             raise self.result
-        return self.result
+        requests = self.result if isinstance(self.result, tuple) else (self.result,)
+        return ClinicalTrialsQueryInterpretationBatch(requests=requests)
 
 
 @dataclass
@@ -102,6 +108,9 @@ class BlockingPlanner:
             chart_type=ChartType.BAR_CHART,
             group_by=GroupBy.TRIAL_PHASE,
         )
+
+    def plan_many(self, request: TrialQueryRequest) -> tuple[QueryPlan, ...]:
+        return (self.plan(request),)
 
 
 @dataclass
@@ -200,6 +209,38 @@ def test_llm_planner_creates_an_extended_chart_plan() -> None:
     assert plan.chart_type is ChartType.NETWORK_GRAPH
     assert plan.group_by is GroupBy.INTERVENTION
     assert plan.series_by is GroupBy.SPONSOR
+
+
+def test_llm_planner_creates_ordered_plans_for_independent_requests() -> None:
+    planner = LlmQueryPlanner(
+        FakeInterpreter(
+            (
+                ClinicalTrialsQueryInterpretation(
+                    is_supported=True,
+                    visualization_needed=True,
+                    chart_type=ChartType.BAR_CHART,
+                    group_by=GroupBy.TRIAL_PHASE,
+                    clinicaltrials_query=ClinicalTrialsGovQuery(condition="Melanoma"),
+                    reason="Show a phase distribution.",
+                ),
+                supported_time_series_interpretation(condition="Lung cancer"),
+            )
+        )
+    )
+
+    plans = planner.plan_many(
+        TrialQueryRequest(
+            query=(
+                "Show melanoma trials by phase and lung cancer trials by start year."
+            )
+        )
+    )
+
+    assert [plan.chart_type for plan in plans] == [
+        ChartType.BAR_CHART,
+        ChartType.TIME_SERIES,
+    ]
+    assert [plan.filters.condition for plan in plans] == ["Melanoma", "Lung cancer"]
 
 
 def test_llm_planner_rejects_a_chart_disabled_by_the_registry() -> None:
@@ -322,9 +363,10 @@ def test_dspy_interpreter_validates_the_program_json_response() -> None:
         TrialQueryRequest(query="Chart melanoma studies by phase.")
     )
 
-    assert interpretation.chart_type is ChartType.BAR_CHART
-    assert interpretation.group_by is GroupBy.TRIAL_PHASE
-    assert interpretation.clinicaltrials_query.condition == "Melanoma"
+    result = interpretation.requests[0]
+    assert result.chart_type is ChartType.BAR_CHART
+    assert result.group_by is GroupBy.TRIAL_PHASE
+    assert result.clinicaltrials_query.condition == "Melanoma"
 
 
 def test_dspy_interpreter_normalizes_extended_chart_terms() -> None:
@@ -348,9 +390,91 @@ def test_dspy_interpreter_normalizes_extended_chart_terms() -> None:
         TrialQueryRequest(query="Show conditions connected to sites.")
     )
 
-    assert interpretation.chart_type is ChartType.NETWORK_GRAPH
-    assert interpretation.group_by is GroupBy.CONDITION
-    assert interpretation.series_by is GroupBy.SITE
+    result = interpretation.requests[0]
+    assert result.chart_type is ChartType.NETWORK_GRAPH
+    assert result.group_by is GroupBy.CONDITION
+    assert result.series_by is GroupBy.SITE
+
+
+def test_dspy_interpreter_validates_multiple_independent_requests() -> None:
+    interpreter = DspyClinicalTrialsQueryInterpreter(
+        FakeDspyProgram(
+            """
+            {
+              "requests": [
+                {
+                  "is_supported": true,
+                  "visualization_needed": true,
+                  "chart_type": "bar_chart",
+                  "group_by": "trial_phase",
+                  "clinicaltrials_query": {"condition": "Melanoma"},
+                  "reason": "Show phases for melanoma."
+                },
+                {
+                  "is_supported": true,
+                  "visualization_needed": true,
+                  "chart_type": "time_series",
+                  "group_by": "start_year",
+                  "clinicaltrials_query": {"condition": "Lung cancer"},
+                  "reason": "Show yearly lung cancer trials."
+                }
+              ]
+            }
+            """
+        )
+    )
+
+    interpretations = interpreter.interpret(
+        TrialQueryRequest(
+            query="Show melanoma trials by phase and lung cancer trials by year."
+        )
+    )
+
+    assert [item.chart_type for item in interpretations.requests] == [
+        ChartType.BAR_CHART,
+        ChartType.TIME_SERIES,
+    ]
+
+
+def test_dspy_interpreter_converts_an_empty_request_list_to_out_of_scope() -> None:
+    interpretation = DspyClinicalTrialsQueryInterpreter(
+        FakeDspyProgram('{"requests": []}')
+    ).interpret(TrialQueryRequest(query="What will the weather be in Boston tomorrow?"))
+
+    assert len(interpretation.requests) == 1
+    result = interpretation.requests[0]
+    assert result.is_supported is False
+    assert result.visualization_needed is False
+    assert result.chart_type is None
+    assert result.clinicaltrials_query == ClinicalTrialsGovQuery()
+
+
+def test_dspy_interpreter_canonicalizes_an_unsupported_request() -> None:
+    interpretation = DspyClinicalTrialsQueryInterpreter(
+        FakeDspyProgram(
+            """
+            {
+              "requests": [
+                {
+                  "is_supported": false,
+                  "visualization_needed": true,
+                  "chart_type": "bar_chart",
+                  "group_by": "trial_phase",
+                  "clinicaltrials_query": {"condition": "Boston"},
+                  "reason": "Weather is outside the source scope."
+                }
+              ]
+            }
+            """
+        )
+    ).interpret(TrialQueryRequest(query="What will the weather be in Boston tomorrow?"))
+
+    result = interpretation.requests[0]
+    assert result.is_supported is False
+    assert result.visualization_needed is False
+    assert result.chart_type is None
+    assert result.group_by is None
+    assert result.clinicaltrials_query == ClinicalTrialsGovQuery()
 
 
 @pytest.mark.parametrize(
@@ -433,9 +557,10 @@ def test_dspy_interpreter_normalizes_common_semantic_chart_fields(
         FakeDspyProgram(model_output)
     ).interpret(TrialQueryRequest(query="A clinical-trial visualization question."))
 
-    assert interpretation.chart_type is chart_type
-    assert interpretation.group_by is group_by
-    assert interpretation.series_by is series_by
+    result = interpretation.requests[0]
+    assert result.chart_type is chart_type
+    assert result.group_by is group_by
+    assert result.series_by is series_by
 
 
 @pytest.mark.parametrize("wrapper_name", ("additional_filters", "other_filters"))
@@ -465,7 +590,7 @@ def test_dspy_interpreter_ignores_empty_legacy_filter_wrappers(
         TrialQueryRequest(query="How have melanoma trials changed over time?")
     )
 
-    assert interpretation.clinicaltrials_query.condition == "Melanoma"
+    assert interpretation.requests[0].clinicaltrials_query.condition == "Melanoma"
 
 
 def test_dspy_interpreter_rejects_an_unsupported_nested_filter() -> None:
@@ -517,7 +642,7 @@ def test_dspy_interpreter_reports_safe_schema_diagnostics() -> None:
 
     with pytest.raises(
         QueryInterpretationProviderError,
-        match=r"schema issues: unexpected:extra_forbidden",
+        match=r"requests.0.unexpected:extra_forbidden",
     ):
         interpreter.interpret(TrialQueryRequest(query="Chart melanoma trials."))
 

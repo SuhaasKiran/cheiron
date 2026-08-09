@@ -10,6 +10,19 @@ def test_load_settings_uses_safe_defaults() -> None:
 
     assert settings.environment == "development"
     assert settings.log_level == "INFO"
+    assert settings.retrieval_max_studies == 1_000
+
+
+def test_load_settings_reads_the_retrieval_record_limit() -> None:
+    settings = load_settings({"CHEIRON_RETRIEVAL_MAX_STUDIES": "2000"})
+
+    assert settings.retrieval_max_studies == 2_000
+
+
+@pytest.mark.parametrize("value", ("0", "10001", "many"))
+def test_load_settings_rejects_an_invalid_retrieval_record_limit(value: str) -> None:
+    with pytest.raises(SettingsError, match="CHEIRON_RETRIEVAL_MAX_STUDIES"):
+        load_settings({"CHEIRON_RETRIEVAL_MAX_STUDIES": value})
 
 
 def test_load_settings_reads_supported_environment_overrides() -> None:

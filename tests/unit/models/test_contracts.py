@@ -10,6 +10,7 @@ from cheiron_core.models import (
     SortOrder,
     TrialFilters,
     TrialQueryRequest,
+    VisualizationBatchResponse,
     VisualizationMeta,
     VisualizationResponse,
     VisualizationSpec,
@@ -110,6 +111,22 @@ def test_visualization_response_serializes_a_frontend_ready_chart() -> None:
             "sorting": "trial_count_descending",
         },
     }
+
+
+def test_visualization_batch_response_serializes_ordered_chart_results() -> None:
+    result = VisualizationResponse(
+        visualization=VisualizationSpec(
+            chart_type=ChartType.BAR_CHART,
+            title="Trials by Phase",
+            encoding={"x": "trial_phase", "y": "trial_count"},
+            data=(),
+        ),
+        meta=VisualizationMeta(filters=TrialFilters()),
+    )
+
+    response = VisualizationBatchResponse(results=(result, result))
+
+    assert response.to_dict() == {"results": [result.to_dict(), result.to_dict()]}
 
 
 def test_visualization_model_rejects_an_empty_encoding() -> None:

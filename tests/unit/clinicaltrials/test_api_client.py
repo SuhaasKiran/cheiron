@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import logging
+import socket
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from urllib.error import URLError
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -39,13 +41,29 @@ class TimeoutTransport:
             ) from error
 
 
+class DnsFailureTransport:
+    """Raise a controlled DNS failure through the production error boundary."""
+
+    def get_json(self, url: str, *, timeout_seconds: float) -> object:
+        try:
+            raise socket.gaierror("name resolution failed")
+        except socket.gaierror as error:
+            try:
+                raise URLError(error)
+            except URLError as url_error:
+                raise ClinicalTrialsApiTransportError(
+                    "ClinicalTrials.gov could not be reached."
+                ) from url_error
+
+
 def test_fetch_studies_builds_a_json_search_request() -> None:
     transport = FakeJsonTransport(
         responses=[
+            {"studies": [], "totalCount": 1},
             {
                 "studies": [{"protocolSection": {"identificationModule": {}}}],
                 "totalCount": 1,
-            }
+            },
         ]
     )
     client = ClinicalTrialsApiClient(
@@ -55,7 +73,14 @@ def test_fetch_studies_builds_a_json_search_request() -> None:
 
     result = client.fetch_studies({"query.cond": "Melanoma"})
 
-    query = parse_qs(urlparse(transport.urls[0]).query)
+    count_query = parse_qs(urlparse(transport.urls[0]).query)
+    query = parse_qs(urlparse(transport.urls[1]).query)
+    assert count_query == {
+        "query.cond": ["Melanoma"],
+        "countTotal": ["true"],
+        "format": ["json"],
+        "pageSize": ["1"],
+    }
     assert query == {
         "query.cond": ["Melanoma"],
         "format": ["json"],
@@ -71,6 +96,7 @@ def test_fetch_studies_builds_a_json_search_request() -> None:
 def test_fetch_studies_follows_pagination_tokens() -> None:
     transport = FakeJsonTransport(
         responses=[
+            {"studies": [], "totalCount": 2},
             {
                 "studies": [{"id": "first"}],
                 "nextPageToken": "second-page",
@@ -87,7 +113,7 @@ def test_fetch_studies_follows_pagination_tokens() -> None:
     result = client.fetch_studies({"query.term": "melanoma"})
 
     assert [study["id"] for study in result.studies] == ["first", "second"]
-    assert parse_qs(urlparse(transport.urls[1]).query)["pageToken"] == ["second-page"]
+    assert parse_qs(urlparse(transport.urls[2]).query)["pageToken"] == ["second-page"]
     assert result.pages_fetched == 2
     assert result.truncated is False
     assert result.has_more_results is False
@@ -96,10 +122,11 @@ def test_fetch_studies_follows_pagination_tokens() -> None:
 def test_fetch_studies_stops_at_the_requested_record_limit() -> None:
     transport = FakeJsonTransport(
         responses=[
+            {"studies": [], "totalCount": 2},
             {
                 "studies": [{"id": "first"}, {"id": "second"}],
                 "nextPageToken": "more-results",
-            }
+            },
         ]
     )
     client = ClinicalTrialsApiClient(
@@ -112,7 +139,38 @@ def test_fetch_studies_stops_at_the_requested_record_limit() -> None:
     assert [study["id"] for study in result.studies] == ["first", "second"]
     assert result.truncated is True
     assert result.has_more_results is True
+    assert len(transport.urls) == 2
+
+
+def test_fetch_studies_stops_after_the_count_when_the_result_is_too_large(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    transport = FakeJsonTransport(responses=[{"studies": [], "totalCount": 12_000}])
+    client = ClinicalTrialsApiClient(
+        transport,
+        base_url="https://api.example.test/v2/studies",
+    )
+    caplog.set_level(
+        logging.DEBUG,
+        logger="uvicorn.error.cheiron_core.clinicaltrials.api_client",
+    )
+
+    result = client.fetch_studies({}, max_studies=1_000)
+
+    assert result.studies == ()
+    assert result.total_count == 12_000
+    assert result.pages_fetched == 0
+    assert result.truncated is True
+    assert result.has_more_results is True
     assert len(transport.urls) == 1
+    assert (
+        "clinicaltrials_result_count source_total_count=12000 "
+        "configured_max_studies=1000" in caplog.messages
+    )
+    assert (
+        "clinicaltrials_result_limit_exceeded source_total_count=12000 "
+        "configured_max_studies=1000" in caplog.messages
+    )
 
 
 def test_fetch_studies_retries_a_transient_http_failure(
@@ -121,7 +179,7 @@ def test_fetch_studies_retries_a_transient_http_failure(
     transport = FakeJsonTransport(
         responses=[
             ClinicalTrialsApiHttpError(status_code=429),
-            {"studies": []},
+            {"studies": [], "totalCount": 0},
         ]
     )
     delays: list[float] = []
@@ -141,9 +199,10 @@ def test_fetch_studies_retries_a_transient_http_failure(
     assert len(transport.urls) == 2
     assert delays == [0.25]
     assert (
-        "clinicaltrials_request_retry attempt=1 "
+        "clinicaltrials_request_retry operation=total_count_preflight attempt=1 "
         "error_type=ClinicalTrialsApiHttpError status_code=429 "
-        "cause_category=http_response" in caplog.messages
+        "cause_category=http_response cause_type=none cause_reason_type=none"
+        in caplog.messages
     )
 
 
@@ -163,9 +222,10 @@ def test_fetch_studies_logs_the_final_source_failure_with_its_status(
         client.fetch_studies({})
 
     assert (
-        "clinicaltrials_request_failed attempts=1 "
+        "clinicaltrials_request_failed operation=total_count_preflight attempts=1 "
         "error_type=ClinicalTrialsApiHttpError status_code=400 "
-        "cause_category=http_response" in caplog.messages
+        "cause_category=http_response cause_type=none cause_reason_type=none"
+        in caplog.messages
     )
 
 
@@ -186,9 +246,34 @@ def test_fetch_studies_logs_a_safe_transport_failure_category(
         client.fetch_studies({})
 
     assert (
-        "clinicaltrials_request_failed attempts=1 "
+        "clinicaltrials_request_failed operation=total_count_preflight attempts=1 "
         "error_type=ClinicalTrialsApiTransportError status_code=None "
-        "cause_category=timeout" in caplog.messages
+        "cause_category=timeout cause_type=TimeoutError cause_reason_type=none"
+        in caplog.messages
+    )
+
+
+def test_fetch_studies_logs_the_dns_failure_cause_type(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = ClinicalTrialsApiClient(
+        DnsFailureTransport(),
+        base_url="https://api.example.test/v2/studies",
+        max_retries=0,
+    )
+    caplog.set_level(
+        logging.WARNING,
+        logger="uvicorn.error.cheiron_core.clinicaltrials.api_client",
+    )
+
+    with pytest.raises(ClinicalTrialsApiTransportError):
+        client.fetch_studies({})
+
+    assert (
+        "clinicaltrials_request_failed operation=total_count_preflight attempts=1 "
+        "error_type=ClinicalTrialsApiTransportError status_code=None "
+        "cause_category=network cause_type=URLError cause_reason_type=gaierror"
+        in caplog.messages
     )
 
 
@@ -240,6 +325,7 @@ def test_fetch_studies_rejects_a_repeated_page_token() -> None:
     client = ClinicalTrialsApiClient(
         FakeJsonTransport(
             responses=[
+                {"studies": []},
                 {"studies": [], "nextPageToken": "same-token"},
                 {"studies": [], "nextPageToken": "same-token"},
             ]
@@ -254,6 +340,7 @@ def test_fetch_studies_rejects_a_repeated_page_token() -> None:
 @pytest.mark.parametrize(
     "parameters",
     [
+        {"countTotal": "false"},
         {"pageSize": "100"},
         {"pageToken": "untrusted-token"},
         {"format": "csv"},

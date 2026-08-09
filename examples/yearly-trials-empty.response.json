@@ -1,5 +1,7 @@
 {
-  "visualization": {
+  "results": [
+    {
+      "visualization": {
     "type": "time_series",
     "title": "Trials by Start Year",
     "encoding": {
@@ -7,8 +9,8 @@
       "y": "trial_count"
     },
     "data": []
-  },
-  "meta": {
+      },
+      "meta": {
     "filters": {
       "condition": "Congenital Adrenal Hyperplasia"
     },
@@ -17,5 +19,7 @@
     "time_granularity": "year",
     "grouping": "start_year",
     "sorting": "start_year_ascending"
-  }
+      }
+    }
+  ]
 }

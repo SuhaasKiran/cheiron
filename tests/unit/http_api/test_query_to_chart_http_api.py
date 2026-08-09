@@ -21,15 +21,23 @@ from cheiron_core.llm_query_planning import (
 from cheiron_core.models import (
     ChartType,
     TrialFilters,
+    VisualizationBatchResponse,
     VisualizationMeta,
     VisualizationResponse,
     VisualizationSpec,
 )
 from cheiron_core.query_planning import UnsupportedQueryError
-from cheiron_core.query_to_chart import IncompleteTrialRetrievalError
+from cheiron_core.query_to_chart import (
+    IncompleteTrialRetrievalError,
+    TrialResultLimitExceededError,
+)
 from cheiron_core.request_validation import RequestValidationError
 from cheiron_core.settings import OpenAiLlmSettings, Settings
-from cheiron_core.trial_retrieval import TrialRetrievalDependencyError
+from cheiron_core.trial_retrieval import (
+    TrialRetrievalDependencyError,
+    TrialRetrievalQueryError,
+    TrialRetrievalSourceDataError,
+)
 from fastapi.testclient import TestClient
 from starlette.types import Message, Receive, Scope, Send
 
@@ -38,32 +46,36 @@ from starlette.types import Message, Receive, Scope, Send
 class FakeQueryToChartFlow:
     """A local flow double that captures the HTTP payload."""
 
-    result: VisualizationResponse | Exception
+    result: VisualizationBatchResponse | Exception
     payloads: list[object] = field(default_factory=list)
 
-    def execute(self, payload: object) -> VisualizationResponse:
+    def execute(self, payload: object) -> VisualizationBatchResponse:
         self.payloads.append(payload)
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
 
 
-def make_response() -> VisualizationResponse:
+def make_response() -> VisualizationBatchResponse:
     """Build a valid response the HTTP adapter should serialize unchanged."""
 
-    return VisualizationResponse(
-        visualization=VisualizationSpec(
-            chart_type=ChartType.TIME_SERIES,
-            title="Trials by Start Year",
-            encoding={"x": "start_year", "y": "trial_count"},
-            data=({"start_year": 2024, "trial_count": 2},),
-        ),
-        meta=VisualizationMeta(
-            filters=TrialFilters(condition="Melanoma"),
-            units="trials",
-            time_granularity="year",
-            grouping="start_year",
-            sorting="start_year_ascending",
+    return VisualizationBatchResponse(
+        results=(
+            VisualizationResponse(
+                visualization=VisualizationSpec(
+                    chart_type=ChartType.TIME_SERIES,
+                    title="Trials by Start Year",
+                    encoding={"x": "start_year", "y": "trial_count"},
+                    data=({"start_year": 2024, "trial_count": 2},),
+                ),
+                meta=VisualizationMeta(
+                    filters=TrialFilters(condition="Melanoma"),
+                    units="trials",
+                    time_granularity="year",
+                    grouping="start_year",
+                    sorting="start_year_ascending",
+                ),
+            ),
         ),
     )
 
@@ -110,6 +122,24 @@ def test_post_chart_endpoint_returns_the_flow_response_schema() -> None:
     assert headers["content-type"] == "application/json"
     assert response == make_response().to_dict()
     assert flow.payloads == [{"query": "trials by year", "filters": {}}]
+
+
+def test_post_chart_endpoint_serializes_multiple_chart_results() -> None:
+    from cheiron_core.http_api import create_http_api
+
+    first_result = make_response().results[0]
+    flow = FakeQueryToChartFlow(
+        VisualizationBatchResponse(results=(first_result, first_result))
+    )
+
+    status, _, response = invoke(TestClient(create_http_api(flow)))
+
+    assert status == 200
+    results = response["results"]
+    assert isinstance(results, list)
+    assert len(results) == 2
+    assert results[0] == first_result.to_dict()
+    assert results[1] == first_result.to_dict()
 
 
 def test_endpoint_rejects_unsupported_method_and_path() -> None:
@@ -249,9 +279,24 @@ def test_endpoint_maps_known_flow_errors_to_safe_status_codes() -> None:
             "source_unavailable",
         ),
         (
+            TrialRetrievalQueryError("source query is invalid"),
+            422,
+            "source_query_invalid",
+        ),
+        (
+            TrialRetrievalSourceDataError("source data is invalid"),
+            502,
+            "source_data_invalid",
+        ),
+        (
             IncompleteTrialRetrievalError("source result was truncated"),
             503,
             "source_result_incomplete",
+        ),
+        (
+            TrialResultLimitExceededError(total_count=12_000, max_studies=1_000),
+            422,
+            "source_result_too_large",
         ),
         (
             ClinicalTrialsRecordMappingError("source record is malformed"),
@@ -295,6 +340,36 @@ def test_endpoint_maps_known_flow_errors_to_safe_status_codes() -> None:
 
         assert status == expected_status
         assert error_code(response) == expected_code
+
+
+def test_endpoint_explains_how_to_refine_an_oversized_source_result() -> None:
+    from cheiron_core.http_api import create_http_api
+
+    status, _, response = invoke(
+        TestClient(
+            create_http_api(
+                FakeQueryToChartFlow(
+                    TrialResultLimitExceededError(
+                        total_count=12_000,
+                        max_studies=1_000,
+                    )
+                )
+            ),
+            raise_server_exceptions=False,
+        )
+    )
+
+    assert status == 422
+    assert response == {
+        "error": {
+            "code": "source_result_too_large",
+            "message": (
+                "This query matches 12,000 trials, which exceeds the 1,000-trial "
+                "limit. Narrow the query with a condition, intervention, phase, or "
+                "date-range filter."
+            ),
+        }
+    }
 
 
 def test_llm_rate_limit_response_includes_a_retry_after_header() -> None:

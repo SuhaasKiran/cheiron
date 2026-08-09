@@ -12,6 +12,7 @@ import pytest
 from cheiron_core.chart_data_builder import ChartDataBuilder
 from cheiron_core.clinicaltrials import ClinicalTrialsApiClient
 from cheiron_core.http_api import create_http_api
+from cheiron_core.models import ChartType, GroupBy, QueryPlan, TrialFilters
 from cheiron_core.query_planning import SimpleQueryPlanner
 from cheiron_core.query_to_chart import QueryToChartFlow
 from cheiron_core.request_validation import RequestValidator
@@ -36,6 +37,16 @@ class FixtureTransport:
         return self.payload
 
 
+@dataclass(frozen=True)
+class FixtureMultiPlanner:
+    """Provide two independent plans while the rest of the HTTP flow is real."""
+
+    plans: tuple[QueryPlan, ...]
+
+    def plan_many(self, request: object) -> tuple[QueryPlan, ...]:
+        return self.plans
+
+
 def load_json(path: Path) -> dict[str, object]:
     """Load one checked-in JSON example with a clear local assertion."""
 
@@ -44,7 +55,9 @@ def load_json(path: Path) -> dict[str, object]:
     return value
 
 
-def make_fixture_client() -> tuple[TestClient, FixtureTransport]:
+def make_fixture_client(
+    query_planner: SimpleQueryPlanner | FixtureMultiPlanner | None = None,
+) -> tuple[TestClient, FixtureTransport]:
     """Compose the real local flow with a saved ClinicalTrials.gov response."""
 
     raw_study = load_json(FIXTURE_PATH)
@@ -52,7 +65,7 @@ def make_fixture_client() -> tuple[TestClient, FixtureTransport]:
     api_client = ClinicalTrialsApiClient(transport, max_retries=0)
     flow = QueryToChartFlow(
         request_validator=RequestValidator(),
-        query_planner=SimpleQueryPlanner(),
+        query_planner=query_planner or SimpleQueryPlanner(),
         trial_retriever=TrialRetriever(api_client),
         chart_data_builder=ChartDataBuilder(),
     )
@@ -96,9 +109,12 @@ def test_examples_match_the_full_local_http_flow(
 
     assert response.status_code == 200
     assert response.json() == expected_response
-    assert len(transport.urls) == 1
-    request_parameters = parse_qs(urlparse(transport.urls[0]).query)
-    assert request_parameters == expected_query_parameters
+    assert len(transport.urls) == 2
+    count_query_parameters = dict(expected_query_parameters)
+    count_query_parameters["countTotal"] = ["true"]
+    count_query_parameters["pageSize"] = ["1"]
+    assert parse_qs(urlparse(transport.urls[0]).query) == count_query_parameters
+    assert parse_qs(urlparse(transport.urls[1]).query) == expected_query_parameters
 
 
 @pytest.mark.parametrize(
@@ -193,18 +209,61 @@ def test_extended_charts_match_the_full_local_http_flow(
 
     assert response.status_code == 200
     assert response.json() == {
-        "visualization": expected_visualization,
-        "meta": {
-            "filters": {"condition": "Congenital Adrenal Hyperplasia"},
-            "source": "clinicaltrials.gov",
-            "units": "trials",
-            "grouping": expected_grouping,
-            "sorting": expected_sorting,
-        },
+        "results": [
+            {
+                "visualization": expected_visualization,
+                "meta": {
+                    "filters": {"condition": "Congenital Adrenal Hyperplasia"},
+                    "source": "clinicaltrials.gov",
+                    "units": "trials",
+                    "grouping": expected_grouping,
+                    "sorting": expected_sorting,
+                },
+            }
+        ]
     }
-    assert len(transport.urls) == 1
+    assert len(transport.urls) == 2
     assert parse_qs(urlparse(transport.urls[0]).query) == {
+        "countTotal": ["true"],
+        "format": ["json"],
+        "pageSize": ["1"],
+        "query.cond": ["Congenital Adrenal Hyperplasia"],
+    }
+    assert parse_qs(urlparse(transport.urls[1]).query) == {
         "format": ["json"],
         "pageSize": ["100"],
         "query.cond": ["Congenital Adrenal Hyperplasia"],
     }
+
+
+def test_multiple_chart_results_use_real_fixture_retrieval_and_serialization() -> None:
+    plans = (
+        QueryPlan(
+            filters=TrialFilters(condition="Melanoma"),
+            chart_type=ChartType.TIME_SERIES,
+            group_by=GroupBy.START_YEAR,
+        ),
+        QueryPlan(
+            filters=TrialFilters(condition="Lung cancer"),
+            chart_type=ChartType.BAR_CHART,
+            group_by=GroupBy.TRIAL_PHASE,
+        ),
+    )
+    client, transport = make_fixture_client(FixtureMultiPlanner(plans))
+
+    response = client.post(
+        "/api/v1/charts",
+        json={"query": "Show two independent charts.", "filters": {}},
+    )
+
+    assert response.status_code == 200
+    results = response.json()["results"]
+    assert [result["visualization"]["type"] for result in results] == [
+        "time_series",
+        "bar_chart",
+    ]
+    assert len(transport.urls) == 4
+    assert {
+        tuple(sorted(parse_qs(urlparse(url).query)["query.cond"]))
+        for url in transport.urls
+    } == {("Lung cancer",), ("Melanoma",)}

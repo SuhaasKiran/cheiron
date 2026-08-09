@@ -1,5 +1,7 @@
 {
-  "visualization": {
+  "results": [
+    {
+      "visualization": {
     "type": "bar_chart",
     "title": "Trials by Phase",
     "encoding": {
@@ -16,12 +18,14 @@
         "trial_count": 1
       }
     ]
-  },
-  "meta": {
+      },
+      "meta": {
     "filters": {},
     "source": "clinicaltrials.gov",
     "units": "trials",
     "grouping": "trial_phase",
     "sorting": "trial_count_descending"
-  }
+      }
+    }
+  ]
 }

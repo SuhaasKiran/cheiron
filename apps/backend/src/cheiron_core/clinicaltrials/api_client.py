@@ -16,11 +16,14 @@ from urllib.request import Request, urlopen
 DEFAULT_BASE_URL = "https://clinicaltrials.gov/api/v2/studies"
 DEFAULT_PAGE_SIZE = 100
 DEFAULT_MAX_STUDIES = 1_000
+COUNT_PAGE_SIZE = 1
 MAX_PAGE_SIZE = 1_000
 MAX_STUDIES = 10_000
 MAX_RETRIES = 2
 RETRY_DELAY_SECONDS = 0.25
-_CLIENT_CONTROLLED_PARAMETERS = frozenset({"format", "pageSize", "pageToken"})
+_CLIENT_CONTROLLED_PARAMETERS = frozenset(
+    {"countTotal", "format", "pageSize", "pageToken"}
+)
 _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 _LOGGER = logging.getLogger("uvicorn.error.cheiron_core.clinicaltrials.api_client")
 
@@ -144,10 +147,33 @@ class ClinicalTrialsApiClient:
             max_studies,
         )
 
+        total_count = self._fetch_total_count(parameters, max_studies)
+        if total_count == 0:
+            return ClinicalTrialsSearchResult(
+                studies=(),
+                total_count=0,
+                pages_fetched=0,
+                truncated=False,
+                has_more_results=False,
+            )
+        if total_count is not None and total_count > max_studies:
+            _LOGGER.warning(
+                "clinicaltrials_result_limit_exceeded "
+                "source_total_count=%d configured_max_studies=%d",
+                total_count,
+                max_studies,
+            )
+            return ClinicalTrialsSearchResult(
+                studies=(),
+                total_count=total_count,
+                pages_fetched=0,
+                truncated=True,
+                has_more_results=True,
+            )
+
         studies: list[Mapping[str, object]] = []
         seen_page_tokens: set[str] = set()
         page_token: str | None = None
-        total_count: int | None = None
         pages_fetched = 0
         truncated = False
         has_more_results = False
@@ -168,7 +194,10 @@ class ClinicalTrialsApiClient:
                 page_token is not None,
             )
             page = self._parse_page(
-                self._get_json_with_retries(self._build_url(request_parameters))
+                self._get_json_with_retries(
+                    self._build_url(request_parameters),
+                    operation="studies_page",
+                )
             )
             pages_fetched += 1
             if page.total_count is not None:
@@ -218,7 +247,49 @@ class ClinicalTrialsApiClient:
             has_more_results=has_more_results,
         )
 
-    def _get_json_with_retries(self, url: str) -> object:
+    def _fetch_total_count(
+        self,
+        parameters: Mapping[str, str],
+        max_studies: int,
+    ) -> int | None:
+        """Request the source count before retrieving full pages of study records."""
+
+        count_parameters = dict(parameters)
+        count_parameters.update(
+            countTotal="true",
+            format="json",
+            pageSize=str(COUNT_PAGE_SIZE),
+        )
+        _LOGGER.debug(
+            "clinicaltrials_count_preflight_started "
+            "parameter_names=%s count_page_size=%d configured_max_studies=%d",
+            ",".join(sorted(parameters)) or "none",
+            COUNT_PAGE_SIZE,
+            max_studies,
+        )
+        page = self._parse_page(
+            self._get_json_with_retries(
+                self._build_url(count_parameters),
+                operation="total_count_preflight",
+            )
+        )
+        if page.total_count is not None:
+            _LOGGER.debug(
+                "clinicaltrials_result_count "
+                "source_total_count=%d configured_max_studies=%d",
+                page.total_count,
+                max_studies,
+            )
+        else:
+            _LOGGER.warning(
+                "clinicaltrials_result_count_missing configured_max_studies=%d",
+                max_studies,
+            )
+        return page.total_count
+
+    def _get_json_with_retries(self, url: str, *, operation: str) -> object:
+        """Run one source operation with bounded retries and safe diagnostics."""
+
         for attempt in range(self._max_retries + 1):
             try:
                 return self._transport.get_json(
@@ -234,12 +305,15 @@ class ClinicalTrialsApiClient:
                     )
                     _LOGGER.warning(
                         "clinicaltrials_request_failed "
-                        "attempts=%d error_type=%s status_code=%s "
-                        "cause_category=%s",
+                        "operation=%s attempts=%d error_type=%s status_code=%s "
+                        "cause_category=%s cause_type=%s cause_reason_type=%s",
+                        operation,
                         attempt + 1,
                         type(error).__name__,
                         status_code,
                         self._cause_category(error),
+                        self._cause_type(error),
+                        self._cause_reason_type(error),
                     )
                     raise
                 status_code = (
@@ -249,12 +323,15 @@ class ClinicalTrialsApiClient:
                 )
                 _LOGGER.warning(
                     "clinicaltrials_request_retry "
-                    "attempt=%d error_type=%s status_code=%s "
-                    "cause_category=%s",
+                    "operation=%s attempt=%d error_type=%s status_code=%s "
+                    "cause_category=%s cause_type=%s cause_reason_type=%s",
+                    operation,
                     attempt + 1,
                     type(error).__name__,
                     status_code,
                     self._cause_category(error),
+                    self._cause_type(error),
+                    self._cause_reason_type(error),
                 )
                 self._sleeper(self._retry_delay_seconds * (2**attempt))
 
@@ -277,6 +354,22 @@ class ClinicalTrialsApiClient:
         if isinstance(cause, (UnicodeDecodeError, json.JSONDecodeError)):
             return "invalid_json"
         return "transport"
+
+    @staticmethod
+    def _cause_type(error: ClinicalTrialsApiError) -> str:
+        """Return the safe exception type immediately beneath the API error."""
+
+        cause = error.__cause__
+        return type(cause).__name__ if cause is not None else "none"
+
+    @staticmethod
+    def _cause_reason_type(error: ClinicalTrialsApiError) -> str:
+        """Return a safe nested network-reason type without logging its text."""
+
+        cause = error.__cause__
+        if not isinstance(cause, URLError):
+            return "none"
+        return type(cause.reason).__name__
 
     @staticmethod
     def _parse_page(payload: object) -> _StudyPage:

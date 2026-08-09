@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -11,14 +12,17 @@ from typing import Protocol
 from cheiron_core.clinicaltrials import (
     ClinicalTrialsApiError,
     ClinicalTrialsApiHttpError,
+    ClinicalTrialsApiProtocolError,
+    ClinicalTrialsApiTransportError,
     ClinicalTrialsSearchResult,
 )
+from cheiron_core.clinicaltrials.api_client import MAX_STUDIES
 from cheiron_core.models import QueryPlan
 
 DEFAULT_RETRIEVAL_PAGE_SIZE = 100
 DEFAULT_RETRIEVAL_MAX_STUDIES = 1_000
 MAX_RETRIEVAL_PAGE_SIZE = 1_000
-MAX_RETRIEVAL_STUDIES = 1_000
+MAX_RETRIEVAL_STUDIES = MAX_STUDIES
 _SUPPORTED_TRIAL_PHASES = frozenset(
     {"EARLY_PHASE1", "PHASE1", "PHASE2", "PHASE3", "PHASE4", "NA"}
 )
@@ -31,6 +35,14 @@ class TrialRetrievalError(RuntimeError):
 
 class TrialRetrievalDependencyError(TrialRetrievalError):
     """Raised when ClinicalTrials.gov cannot provide the requested records."""
+
+
+class TrialRetrievalQueryError(TrialRetrievalError):
+    """Raised when ClinicalTrials.gov rejects a query the backend constructed."""
+
+
+class TrialRetrievalSourceDataError(TrialRetrievalError):
+    """Raised when ClinicalTrials.gov returns unusable source data."""
 
 
 class StudySearchClient(Protocol):
@@ -110,19 +122,19 @@ class TrialRetriever:
                 max_studies=self._max_studies,
             )
         except ClinicalTrialsApiError as error:
-            status_code = (
-                error.status_code
-                if isinstance(error, ClinicalTrialsApiHttpError)
-                else None
-            )
+            mapped_error = self._map_api_error(error)
             _LOGGER.debug(
-                "trial_retrieval_dependency_mapped error_type=%s status_code=%s",
+                "trial_retrieval_source_failure_mapped operation=study_retrieval "
+                "source_error_type=%s mapped_error_type=%s status_code=%s",
                 type(error).__name__,
-                status_code,
+                type(mapped_error).__name__,
+                (
+                    error.status_code
+                    if isinstance(error, ClinicalTrialsApiHttpError)
+                    else None
+                ),
             )
-            raise TrialRetrievalDependencyError(
-                "ClinicalTrials.gov could not retrieve trial records."
-            ) from error
+            raise mapped_error from error
 
         _LOGGER.debug(
             "trial_retrieval_completed studies=%d total_count=%s pages=%d truncated=%s",
@@ -140,6 +152,34 @@ class TrialRetriever:
             query_parameters=query_parameters,
             max_studies=self._max_studies,
             has_more_results=search_result.has_more_results,
+        )
+
+    @staticmethod
+    def _map_api_error(error: ClinicalTrialsApiError) -> TrialRetrievalError:
+        """Preserve source failure semantics for the transport adapter."""
+
+        if isinstance(error, ClinicalTrialsApiProtocolError):
+            return TrialRetrievalSourceDataError(
+                "ClinicalTrials.gov returned an invalid source response."
+            )
+        if isinstance(error, ClinicalTrialsApiTransportError):
+            if isinstance(error.__cause__, (UnicodeDecodeError, json.JSONDecodeError)):
+                return TrialRetrievalSourceDataError(
+                    "ClinicalTrials.gov returned invalid source data."
+                )
+            return TrialRetrievalDependencyError(
+                "ClinicalTrials.gov could not retrieve trial records."
+            )
+        if isinstance(error, ClinicalTrialsApiHttpError):
+            if 400 <= error.status_code < 500 and error.status_code not in {408, 429}:
+                return TrialRetrievalQueryError(
+                    "ClinicalTrials.gov could not process the requested query."
+                )
+            return TrialRetrievalDependencyError(
+                "ClinicalTrials.gov could not retrieve trial records."
+            )
+        return TrialRetrievalSourceDataError(
+            "ClinicalTrials.gov returned an invalid source response."
         )
 
     @staticmethod

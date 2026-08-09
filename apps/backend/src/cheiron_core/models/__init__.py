@@ -11,6 +11,7 @@ from cheiron_core.models.query import TrialFilters, TrialQueryRequest
 from cheiron_core.models.trial import TrialRecord
 from cheiron_core.models.validation import ModelValidationError
 from cheiron_core.models.visualization import (
+    VisualizationBatchResponse,
     VisualizationMeta,
     VisualizationResponse,
     VisualizationSpec,
@@ -27,6 +28,7 @@ __all__ = [
     "TrialQueryRequest",
     "TrialRecord",
     "VisualizationMeta",
+    "VisualizationBatchResponse",
     "VisualizationResponse",
     "VisualizationSpec",
 ]

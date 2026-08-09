@@ -137,6 +137,11 @@ class SimpleQueryPlanner:
             "This question is not supported by the simple query planner."
         )
 
+    def plan_many(self, request: TrialQueryRequest) -> tuple[QueryPlan, ...]:
+        """Return the one deterministic plan supported by the fallback planner."""
+
+        return (self.plan(request),)
+
     def _create_plan(
         self,
         request: TrialQueryRequest,
