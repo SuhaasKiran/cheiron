@@ -5,6 +5,8 @@ structured visualization specifications. It searches ClinicalTrials.gov and
 returns data that a frontend can use to render charts. It does not render image
 files itself.
 
+Source repository: [github.com/SuhaasKiran/cheiron](https://github.com/SuhaasKiran/cheiron)
+
 For example, a client can ask for trial counts over time, compare trial phases,
 or explore relationships between drugs, conditions, sponsors, investigators,
 and sites. The API returns a stable JSON response describing the chart, its
