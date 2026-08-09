@@ -68,6 +68,26 @@ flowchart TD
 
 Solid arrows are required for the first working version. Dotted arrows are later additions. The graph has no loops: each component only uses results from earlier components.
 
+## Topological build order
+
+A topological order is one valid build sequence where a component comes only after the components it needs. Some components can still be designed and tested earlier with local fixtures, but this order shows the safest order for connecting the real backend flow. Use it to choose the next unimplemented component; do not update this reference after each implementation step.
+
+| Build order | Component | Depends on |
+| --- | --- | --- |
+| 1 | Step 1: Project settings and local test setup | Nothing |
+| 2 | Step 2: Request, plan, and chart data models | Project settings |
+| 3 | Step 3: Request validation | Data models |
+| 4 | Step 4: ClinicalTrials.gov API client | Project settings |
+| 5 | Step 5: Simple query planner | Data models and request validation |
+| 6 | Step 7: Trial retrieval | API client and simple query planner |
+| 7 | Step 6: Trial record mapper and cleaner | Raw trial records from retrieval |
+| 8 | Step 8: Chart data builder | Planner and cleaned trial records |
+| 9 | Step 9: Main query-to-chart flow | Validation, retrieval, and chart data builder |
+| 10 | Step 10: HTTP API | Data models and main query-to-chart flow |
+| 11 | Step 11: Example runs and end-to-end tests | HTTP API |
+
+The optional work stays outside this first sequence. Add deep citations after the mapper and chart data builder. Add the LangChain adapter and LangSmith tracing before the structured LLM planner; that planner must still produce the same plan format used by the simple planner.
+
 ## What can be built in parallel
 
 | After this is ready | Build these at the same time | Why this is safe |

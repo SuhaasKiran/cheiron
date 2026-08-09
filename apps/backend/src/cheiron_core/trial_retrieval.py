@@ -1,0 +1,156 @@
+"""Retrieve bounded raw trial records for a validated query plan."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Protocol
+
+from cheiron_core.clinicaltrials import (
+    ClinicalTrialsApiError,
+    ClinicalTrialsSearchResult,
+)
+from cheiron_core.models import QueryPlan
+
+DEFAULT_RETRIEVAL_PAGE_SIZE = 100
+DEFAULT_RETRIEVAL_MAX_STUDIES = 1_000
+MAX_RETRIEVAL_PAGE_SIZE = 1_000
+MAX_RETRIEVAL_STUDIES = 1_000
+_SUPPORTED_TRIAL_PHASES = frozenset(
+    {"EARLY_PHASE1", "PHASE1", "PHASE2", "PHASE3", "PHASE4", "NA"}
+)
+
+
+class TrialRetrievalError(RuntimeError):
+    """Raised when a plan cannot be safely retrieved."""
+
+
+class TrialRetrievalDependencyError(TrialRetrievalError):
+    """Raised when ClinicalTrials.gov cannot provide the requested records."""
+
+
+class StudySearchClient(Protocol):
+    """The narrow API-client contract needed by trial retrieval."""
+
+    def fetch_studies(
+        self,
+        query_parameters: Mapping[str, str],
+        *,
+        page_size: int,
+        max_studies: int,
+    ) -> ClinicalTrialsSearchResult:
+        """Return bounded raw records for the supplied API parameters."""
+
+
+@dataclass(frozen=True, slots=True)
+class TrialRetrievalResult:
+    """Raw records and metadata from one plan-driven ClinicalTrials.gov search."""
+
+    studies: tuple[Mapping[str, object], ...]
+    total_count: int | None
+    pages_fetched: int
+    truncated: bool
+    query_parameters: Mapping[str, str]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "query_parameters",
+            MappingProxyType(dict(self.query_parameters)),
+        )
+
+
+class TrialRetriever:
+    """Translate a validated plan into a bounded ClinicalTrials.gov search."""
+
+    def __init__(
+        self,
+        api_client: StudySearchClient,
+        *,
+        page_size: int = DEFAULT_RETRIEVAL_PAGE_SIZE,
+        max_studies: int = DEFAULT_RETRIEVAL_MAX_STUDIES,
+    ) -> None:
+        self._api_client = api_client
+        self._page_size = self._validate_page_size(page_size)
+        self._max_studies = self._validate_max_studies(max_studies)
+
+    def retrieve(self, plan: QueryPlan) -> TrialRetrievalResult:
+        """Fetch raw records for a plan or raise a clear retrieval error."""
+
+        if not isinstance(plan, QueryPlan):
+            raise TrialRetrievalError("plan must be a QueryPlan instance.")
+
+        query_parameters = self._build_query_parameters(plan)
+        try:
+            search_result = self._api_client.fetch_studies(
+                query_parameters,
+                page_size=self._page_size,
+                max_studies=self._max_studies,
+            )
+        except ClinicalTrialsApiError as error:
+            raise TrialRetrievalDependencyError(
+                "ClinicalTrials.gov could not retrieve trial records."
+            ) from error
+
+        return TrialRetrievalResult(
+            studies=search_result.studies,
+            total_count=search_result.total_count,
+            pages_fetched=search_result.pages_fetched,
+            truncated=search_result.truncated,
+            query_parameters=query_parameters,
+        )
+
+    @staticmethod
+    def _build_query_parameters(plan: QueryPlan) -> dict[str, str]:
+        filters = plan.filters
+        parameters: dict[str, str] = {}
+        advanced_filters: list[str] = []
+
+        if filters.condition is not None:
+            parameters["query.cond"] = filters.condition
+        if filters.drug_name is not None:
+            parameters["query.intr"] = filters.drug_name
+        if filters.trial_phase is not None:
+            TrialRetriever._validate_trial_phase(filters.trial_phase)
+            advanced_filters.append(f"AREA[Phase]{filters.trial_phase}")
+        if filters.start_year is not None or filters.end_year is not None:
+            start_date = (
+                f"{filters.start_year}-01-01"
+                if filters.start_year is not None
+                else "MIN"
+            )
+            end_date = (
+                f"{filters.end_year}-12-31" if filters.end_year is not None else "MAX"
+            )
+            advanced_filters.append(f"AREA[StartDate]RANGE[{start_date},{end_date}]")
+        if advanced_filters:
+            parameters["filter.advanced"] = " AND ".join(advanced_filters)
+        return parameters
+
+    @staticmethod
+    def _validate_trial_phase(trial_phase: str) -> None:
+        if trial_phase not in _SUPPORTED_TRIAL_PHASES:
+            supported_values = ", ".join(sorted(_SUPPORTED_TRIAL_PHASES))
+            raise TrialRetrievalError(
+                f"trial_phase must be one of: {supported_values}."
+            )
+
+    @staticmethod
+    def _validate_page_size(page_size: int) -> int:
+        if type(page_size) is not int or not 1 <= page_size <= MAX_RETRIEVAL_PAGE_SIZE:
+            raise ValueError(
+                f"page_size must be an integer from 1 to {MAX_RETRIEVAL_PAGE_SIZE}."
+            )
+        return page_size
+
+    @staticmethod
+    def _validate_max_studies(max_studies: int) -> int:
+        if (
+            type(max_studies) is not int
+            or not 1 <= max_studies <= MAX_RETRIEVAL_STUDIES
+        ):
+            raise ValueError(
+                f"max_studies must be an integer from 1 to {MAX_RETRIEVAL_STUDIES}."
+            )
+        return max_studies

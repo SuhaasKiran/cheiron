@@ -18,7 +18,7 @@ As the project evolves, update this command during the task only when a newly di
 6. Do not expand the change solely for a `GOOD_TO_FIX` item. Report it as a suggestion.
 7. Run the full configured local test suite, in addition to the relevant lint, formatting, type, build, and other checks required by `/reviewer`. If any test fails, do **not** commit unless the user explicitly instructs you to ignore the failed test(s); report the failure, its impact, and the explicit exception in the final answer. Do not use `--no-verify` to bypass checks.
 8. Write a new entry in `docs/commit-log.md` before committing. Include that log entry in the same focused commit.
-9. Stage only the intended files, create one atomic commit, then report its hash, message, included files, checks run, and any explicitly accepted residual risk.
+9. Stage only the intended files, create one atomic commit, then report its hash, message, included files, checks run, and any explicitly accepted residual risk. Because `/docs/` is ignored by this repository, force-stage a new intended documentation file with `git add -f <path>` and confirm it appears in the staged diff.
 
 ## Commit message format
 

@@ -2,6 +2,12 @@
 
 This log records each project commit in simple language. Each entry is added by the `/commit` command and is included in the same commit it describes.
 
+## 2026-08-08 — FEAT: add plan-driven trial retrieval
+
+- **Changed:** Added a trial retriever that turns a validated chart plan into a safe, limited ClinicalTrials.gov search. It supports condition, drug, phase, and date filters, returns raw study records with search details, and gives a clear error when the API is unavailable. Added local fake-client tests and documentation. Also added a stable dependency order to the component DAG and a commit instruction for staging new ignored documentation files.
+- **Why:** The backend can now safely obtain the trial records needed for later cleaning and chart building, without mixing API details into the planner. The new limits and phase allowlist prevent a broad or malformed search from doing unnecessary work or changing the intended search meaning.
+- **Validated:** Ran targeted trial-retrieval tests (8 passed), Ruff lint and format checks, mypy (19 source files), the full pytest suite (48 passed), `python -m compileall -q apps/backend/src`, `python -m pip check`, and `git diff --check`.
+
 ## 2026-08-08 — FEAT: add request validation and query planning
 
 - **Changed:** Added a request validator that checks incoming question data, accepts only the supported filters, limits request size, and returns a clean request model. Added a simple planner that turns questions about trials by year or by phase into chart plans, with tests and clear documentation. Removed empty placeholder folders that are no longer needed, and clarified that future commit-log entries must describe changes and reasons in plain language.
