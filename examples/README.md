@@ -10,6 +10,9 @@ attempts.
   request body.
 - `query-variation-results.jsonl` — saved output from the most recent example
   run. It includes the HTTP status and returned JSON for each input case.
+- `deliverable-sample-inputs.jsonl` — six small cases for the submission's
+  example-run deliverable: four valid requests, including one composite query,
+  and two intentional errors.
 - `run_query_variations.py` — sends every input case to a local or remote
   Cheiron API and writes the results file.
 
@@ -43,3 +46,23 @@ PYTHONPATH=apps/backend/src .venv/bin/python examples/run_query_variations.py \
 
 Review results by `id`. Cases that intentionally request unsupported or invalid
 behavior should return a documented error response rather than a chart.
+
+## Create the deliverable sample outputs
+
+Run the same six inputs twice: once with deep citations and once without them.
+The `--include-citations` option overrides the setting for every request in the
+file, so the two outputs are directly comparable.
+
+```bash
+PYTHONPATH=apps/backend/src .venv/bin/python examples/run_query_variations.py \
+  --input examples/deliverable-sample-inputs.jsonl \
+  --output examples/deliverable-sample-output-with-citations.jsonl \
+  --include-citations true \
+  --timeout-seconds 120
+
+PYTHONPATH=apps/backend/src .venv/bin/python examples/run_query_variations.py \
+  --input examples/deliverable-sample-inputs.jsonl \
+  --output examples/deliverable-sample-output-without-citations.jsonl \
+  --include-citations false \
+  --timeout-seconds 120
+```

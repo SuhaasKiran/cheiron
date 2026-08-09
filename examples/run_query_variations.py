@@ -23,12 +23,20 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH)
     parser.add_argument("--api-url", default=DEFAULT_API_URL)
     parser.add_argument("--timeout-seconds", type=float, default=30.0)
+    parser.add_argument(
+        "--include-citations",
+        choices=("true", "false"),
+        help="Override the citation preference for every request in this run.",
+    )
     arguments = parser.parse_args()
 
     if arguments.timeout_seconds <= 0:
         parser.error("--timeout-seconds must be positive.")
 
-    cases = _load_cases(arguments.input)
+    cases = _with_citation_preference(
+        _load_cases(arguments.input),
+        arguments.include_citations,
+    )
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     with arguments.output.open("w", encoding="utf-8") as output_file:
         for case in cases:
@@ -65,6 +73,27 @@ def _load_cases(path: Path) -> list[dict[str, Any]]:
     return cases
 
 
+def _with_citation_preference(
+    cases: list[dict[str, Any]],
+    preference: str | None,
+) -> list[dict[str, Any]]:
+    """Copy cases with one optional citation setting applied to every request."""
+
+    if preference is None:
+        return cases
+    include_citations = preference == "true"
+    return [
+        {
+            **case,
+            "request": {
+                **case["request"],
+                "include_citations": include_citations,
+            },
+        }
+        for case in cases
+    ]
+
+
 def _run_case(
     case: dict[str, Any],
     api_url: str,
@@ -92,6 +121,9 @@ def _run_case(
     except HTTPError as error:
         result["http_status"] = error.code
         result["response"] = _decode_response(error.read())
+    except TimeoutError:
+        result["status"] = "timeout"
+        result["error"] = f"Request timed out after {timeout_seconds:g} seconds."
     except URLError as error:
         result["status"] = "transport_error"
         result["error"] = str(error.reason)

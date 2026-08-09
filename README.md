@@ -39,7 +39,10 @@ request, retrieval, or HTTP layers.
 
 ## Run locally
 
-Create and activate a virtual environment, then install dependencies:
+### 1. Install
+
+Create and activate a local virtual environment, then install the required
+packages:
 
 ```bash
 python3 -m venv .venv
@@ -47,23 +50,50 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-Copy `.env.example` to `.env` and set `OPENAI_API_KEY` and `OPENAI_MODEL` if you
-want LLM-based query interpretation. The application loads `.env`
-automatically. Without these values, the deterministic planner is still
-available for its supported requests.
+### 2. Configure
+
+Copy the environment-variable template:
+
+```bash
+cp .env.example .env
+```
+
+The application automatically reads the repository-root `.env` file for local
+development. Variables set by the shell or a deployment platform take priority.
+`.env.example` is only a template and is not read directly.
+
+Set `OPENAI_API_KEY` and `OPENAI_MODEL` in `.env` to use LLM-based query
+interpretation. Without them, the deterministic planner is still available for
+its supported question patterns. Keep real keys only in `.env` or deployment
+secrets, never in Git.
+
+### 3. Start
 
 Start the API from the repository root:
 
 ```bash
-PYTHONPATH=apps/backend/src .venv/bin/uvicorn cheiron_core.http_api:app --reload
+PYTHONPATH=apps/backend/src .venv/bin/uvicorn cheiron_core.http_api:app \
+  --host 127.0.0.1 --port 8000 --reload
 ```
 
 The endpoints are:
 
 - `GET /health` — a public liveness check.
-- `POST /api/v1/charts` — builds visualization specifications.
+- `POST /api/v1/charts` — builds one or more visualization specifications.
 
-For example:
+Check that the API is running:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+Expected response:
+
+```json
+{"status":"ok"}
+```
+
+### 4. Send a request
 
 ```bash
 curl http://127.0.0.1:8000/api/v1/charts \
@@ -71,9 +101,155 @@ curl http://127.0.0.1:8000/api/v1/charts \
   -d '{"query":"Show clinical trial counts by start year for melanoma"}'
 ```
 
-The response contains a `results` array. Each item has a `visualization` object
-with the chart type, title, encoding, and data, along with metadata that
-describes the source search.
+## API request and response
+
+### Request
+
+Send a JSON object to `POST /api/v1/charts`.
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `query` | Yes | The clinical-trial question. It must be a non-empty string of at most 1,000 characters. |
+| `filters` | No | Structured filters that narrow the question. |
+| `include_citations` | No | Boolean. Defaults to `true`. Set it to `false` for a smaller response without per-datum citations. |
+
+Supported `filters` fields are:
+
+| Field | Meaning |
+| --- | --- |
+| `condition` | Clinical condition, such as `Melanoma`. |
+| `drug_name` | One intervention or drug. |
+| `drug_names` | Two to five named drugs for a comparison. Do not combine with `drug_name`. |
+| `trial_phase` | Trial phase, such as `PHASE3`. |
+| `start_year` / `end_year` | Inclusive years from 1900 to 2100. `end_year` cannot be before `start_year`. |
+
+Example request with citations enabled by default:
+
+```json
+{
+  "query": "Show melanoma clinical trials by phase",
+  "filters": {
+    "condition": "Melanoma"
+  }
+}
+```
+
+One user question can contain up to five independent chart requests. The API
+returns the results in the same order as the requests in the question.
+
+### Successful response
+
+A successful response has a `results` array. Each result contains:
+
+- `visualization.type` — one of `bar_chart`, `grouped_bar_chart`,
+  `time_series`, `scatter_plot`, `histogram`, or `network_graph`.
+- `visualization.title` — a readable chart title.
+- `visualization.encoding` — tells a frontend which data field belongs on each
+  visual channel, such as `x`, `y`, `series`, `source`, or `target`.
+- `visualization.data` — the rows to plot. A network graph also has
+  `visualization.nodes`.
+- `meta` — filters, source query details, counts, trial IDs, the resolved chart
+  plan, and any truncation flags.
+
+Example shortened response (the counts are illustrative):
+
+```json
+{
+  "results": [
+    {
+      "visualization": {
+        "type": "bar_chart",
+        "title": "Trials by Phase",
+        "encoding": {"x": "trial_phase", "y": "trial_count"},
+        "data": [
+          {
+            "trial_phase": "PHASE3",
+            "trial_count": 41,
+            "citations": [
+              {
+                "nct_id": "NCT01234567",
+                "evidence": [
+                  {
+                    "field": "protocolSection.designModule.phases",
+                    "value": "PHASE3"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "meta": {
+        "filters": {"condition": "Melanoma"},
+        "source": "clinicaltrials.gov",
+        "grouping": "trial_phase",
+        "source_total_count": 193,
+        "retrieved_study_count": 193
+      }
+    }
+  ]
+}
+```
+
+Deep citations connect a visible value to the contributing ClinicalTrials.gov
+records. Each citation has an NCT ID plus the source field and value that
+supports the plotted value. Citation lists can be shortened to keep responses
+safe; `citations_truncated: true` tells the client when that happens.
+
+### Error response
+
+Errors use one stable shape:
+
+```json
+{
+  "error": {
+    "code": "invalid_request",
+    "message": "query must be a string."
+  }
+}
+```
+
+Common status codes are `400` for invalid request data, `401` for a missing or
+invalid API key, `422` for unsupported questions or queries that are too large,
+`429` for request limits, `502` for unusable ClinicalTrials.gov data, and `503`
+when ClinicalTrials.gov or the optional LLM service is temporarily unavailable.
+
+## Key design decisions and tradeoffs
+
+- **Small backend components:** validation, planning, retrieval, record mapping,
+  chart rendering, and HTTP handling are separate modules. This makes each part
+  easier to test and change. It adds more files than a single script, but avoids
+  tying chart logic to FastAPI or ClinicalTrials.gov response shapes.
+- **Validated plans before source calls:** the LLM and deterministic planners
+  produce a restricted internal plan, not unchecked API parameters. This reduces
+  hallucinated searches and prevents unsupported chart requests from reaching the
+  source API.
+- **ClinicalTrials.gov is the source of truth:** the backend does not maintain a
+  copy of trial data. Results stay close to the source, but depend on its
+  availability and response limits.
+- **Bounded work over partial answers:** retrieval, chart size, LLM concurrency,
+  rate limits, and response size are capped. The service returns a clear error
+  or truncation flag instead of silently presenting an incomplete chart as
+  complete.
+- **Citations are on by default:** traceability makes chart values easier to
+  verify. It increases response size, so callers can opt out with
+  `include_citations: false` when they need a smaller payload.
+
+## Current limitations and most important improvements
+
+- **Query understanding is not perfect.** The LLM can still reject or
+  misunderstand unusual wording, while the deterministic fallback supports only
+  known patterns. With more time, I would add a larger evaluation set and improve
+  planner prompts and tests using real but safely stored question examples.
+- **Large questions may be rejected.** The service intentionally limits source
+  records, chart points, citations, and response bytes to avoid misleading or
+  unsafe results. With more time, I would add an asynchronous large-query flow
+  that stores a complete, reviewable result and lets the client request it in
+  pages.
+- **Operational limits are per application process.** The current API and LLM
+  rate limits are reliable for one process, but not a global limit across many
+  replicas. With more time, I would use a shared rate limiter and add production
+  metrics and alerts for source failures, retries, and limit rejections.
 
 ## Public deployment settings
 
@@ -89,6 +265,40 @@ replicas should also use a shared edge or data-store rate limiter.
 
 Keep real API and LangSmith keys in Railway or another deployment secret store,
 never in Git.
+
+For Railway, use this start command so the service listens on Railway's assigned
+port:
+
+```bash
+PYTHONPATH=apps/backend/src uvicorn cheiron_core.http_api:app --host 0.0.0.0 --port $PORT
+```
+
+## Example runs for the deliverable
+
+The six-case input suite in
+[examples/deliverable-sample-inputs.jsonl](examples/deliverable-sample-inputs.jsonl)
+contains two valid requests with filters, one valid query-only request, one
+composite query with two chart requests, and two intentional errors. Run it
+twice against a running local API to save real JSON outputs with and without
+deep citations:
+
+```bash
+PYTHONPATH=apps/backend/src .venv/bin/python examples/run_query_variations.py \
+  --input examples/deliverable-sample-inputs.jsonl \
+  --output examples/deliverable-sample-output-with-citations.jsonl \
+  --include-citations true \
+  --timeout-seconds 120
+
+PYTHONPATH=apps/backend/src .venv/bin/python examples/run_query_variations.py \
+  --input examples/deliverable-sample-inputs.jsonl \
+  --output examples/deliverable-sample-output-without-citations.jsonl \
+  --include-citations false \
+  --timeout-seconds 120
+```
+
+The two output files contain the actual HTTP status and JSON response for every
+input. Valid result values can change because ClinicalTrials.gov is a live data
+source. See [examples/README.md](examples/README.md) for more details.
 
 ## Verify changes
 
