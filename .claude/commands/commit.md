@@ -12,11 +12,11 @@ As the project evolves, update this command during the task only when a newly di
 
 1. Inspect repository status, staged and unstaged changes, and relevant repository commit conventions.
 2. Run the `/reviewer` procedure. Review scope, correctness, edge cases, reliability, security, tests, documentation, and accidental files.
-3. Report all findings as `MUST_FIX`, `SHOULD_FIX`, or `GOOD_TO_FIX`.
+3. Report all findings as `MUST_FIX`, `SHOULD_FIX`, or `GOOD_TO_FIX`. The coding agent's answer must list every finding, including findings that were fixed before the commit and findings intentionally deferred.
 4. If any `MUST_FIX` finding exists, do **not** commit. Resolve it and re-run the relevant review and checks, or wait for the user's explicit decision when the risk cannot be resolved.
 5. Resolve `SHOULD_FIX` findings when they are in scope and safe. If one is intentionally deferred, clearly record the reason and user acceptance before committing.
 6. Do not expand the change solely for a `GOOD_TO_FIX` item. Report it as a suggestion.
-7. Run the relevant local tests and checks required by `/reviewer`. Do not use `--no-verify` to bypass them.
+7. Run the full configured local test suite, in addition to the relevant lint, formatting, type, build, and other checks required by `/reviewer`. If any test fails, do **not** commit unless the user explicitly instructs you to ignore the failed test(s); report the failure, its impact, and the explicit exception in the final answer. Do not use `--no-verify` to bypass checks.
 8. Write a new entry in `docs/commit-log.md` before committing. Include that log entry in the same focused commit.
 9. Stage only the intended files, create one atomic commit, then report its hash, message, included files, checks run, and any explicitly accepted residual risk.
 
@@ -71,3 +71,4 @@ The log entry is intentionally included in the same commit as the work it descri
 - Do not amend, force-push, reset, or rewrite history without explicit user instruction.
 - Keep each commit focused: include the implementation, tests, documentation, and commit-log entry needed for one coherent change.
 - Do not commit if tests/checks reveal unresolved `MUST_FIX` risk.
+- Always list reviewer findings and full-test-suite results in the final answer, whether or not a commit is created.
